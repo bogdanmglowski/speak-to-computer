@@ -1,0 +1,10 @@
+build-speak-to-computer/
+vendor/whisperer-cpp/
+*.user
+*.autosave
+core
+.idea
+*.iml
+.vscode
+.codex
+docs
