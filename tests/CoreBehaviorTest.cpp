@@ -5,6 +5,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QSettings>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -13,6 +14,9 @@ class CoreBehaviorTest : public QObject {
 
 private slots:
     void settingsShouldExpandHomePath();
+    void settingsShouldResolveModelLabel();
+    void settingsShouldReturnOnlyExistingModelPaths();
+    void settingsShouldSaveModelPath();
     void cleanupShouldTrimAndJoinTranscriptLines();
     void wavWriterShouldWritePcm16MonoHeader();
     void recorderAutoShouldPickFirstAvailableBackend();
@@ -40,6 +44,23 @@ QString createExecutable(QTemporaryDir *dir, const QString &name)
     return path;
 }
 
+QString createFile(QTemporaryDir *dir, const QString &name, const QByteArray &content)
+{
+    const QString path = dir->filePath(name);
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return QString();
+    }
+    file.write(content);
+    file.close();
+    return path;
+}
+
+QString createFile(QTemporaryDir *dir, const QString &name)
+{
+    return createFile(dir, name, "x");
+}
+
 } // namespace
 
 void CoreBehaviorTest::settingsShouldExpandHomePath()
@@ -51,6 +72,45 @@ void CoreBehaviorTest::settingsShouldExpandHomePath()
             QStringLiteral("/opt/whisper-cli"));
     QCOMPARE(AppSettings::expandUserPath(QStringLiteral("~other/whisper-cli")),
             QStringLiteral("~other/whisper-cli"));
+}
+
+void CoreBehaviorTest::settingsShouldResolveModelLabel()
+{
+    QCOMPARE(AppSettings::modelLabel(QStringLiteral("/tmp/ggml-tiny.bin")), QStringLiteral("tiny"));
+    QCOMPARE(AppSettings::modelLabel(QStringLiteral("/tmp/ggml-base.bin")), QStringLiteral("base"));
+    QCOMPARE(AppSettings::modelLabel(QStringLiteral("/tmp/ggml-large-v3.bin")), QStringLiteral("large-v3"));
+    QCOMPARE(AppSettings::modelLabel(QStringLiteral("/tmp/custom-model.bin")), QStringLiteral("custom-model.bin"));
+}
+
+void CoreBehaviorTest::settingsShouldReturnOnlyExistingModelPaths()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QVERIFY(!createFile(&dir, QStringLiteral("ggml-large-v3.bin"), QByteArray(12, 'L')).isEmpty());
+    QVERIFY(!createFile(&dir, QStringLiteral("ggml-medium.bin"), QByteArray(3, 'M')).isEmpty());
+    QVERIFY(!createFile(&dir, QStringLiteral("notes.txt")).isEmpty());
+    QVERIFY(!createFile(&dir, QStringLiteral("for-tests-ggml-small.bin")).isEmpty());
+    QVERIFY(!createFile(&dir, QStringLiteral("ggml-small.bin")).isEmpty());
+    QVERIFY(QFile::resize(dir.filePath(QStringLiteral("ggml-small.bin")), 0));
+
+    const QString currentModelPath = dir.filePath(QStringLiteral("ggml-large.bin"));
+    QCOMPARE(AppSettings::existingModelPaths(currentModelPath),
+            QStringList({dir.filePath(QStringLiteral("ggml-medium.bin")),
+                    dir.filePath(QStringLiteral("ggml-large-v3.bin"))}));
+}
+
+void CoreBehaviorTest::settingsShouldSaveModelPath()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QString errorMessage;
+    QVERIFY2(AppSettings::saveModel(settingsPath, QStringLiteral("/tmp/ggml-medium.bin"), &errorMessage),
+            qPrintable(errorMessage));
+
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    QCOMPARE(settings.value(QStringLiteral("model")).toString(), QStringLiteral("/tmp/ggml-medium.bin"));
 }
 
 void CoreBehaviorTest::cleanupShouldTrimAndJoinTranscriptLines()

@@ -1,9 +1,14 @@
 #include "OverlayWidget.h"
 
+#include "AppSettings.h"
+
 #include <QApplication>
+#include <QAction>
 #include <QFontMetrics>
 #include <QFrame>
 #include <QGuiApplication>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QResizeEvent>
@@ -25,6 +30,12 @@ constexpr int titleTop = 19;
 constexpr int titleHeight = 24;
 constexpr int bodyTop = 48;
 constexpr int cardBottomMargin = 20;
+constexpr int modelChipTop = 13;
+constexpr int modelChipHeight = 28;
+constexpr int modelChipRightPadding = 14;
+constexpr int modelChipHorizontalPadding = 11;
+constexpr int modelChipArrowWidth = 10;
+constexpr int modelChipGapToTitle = 12;
 
 } // namespace
 
@@ -132,6 +143,32 @@ void OverlayWidget::setElapsedMs(qint64 elapsedMs)
     }
 }
 
+void OverlayWidget::setModelLabel(const QString &label)
+{
+    if (modelLabel_ == label) {
+        return;
+    }
+    modelLabel_ = label;
+    update();
+}
+
+void OverlayWidget::setModelControlEnabled(bool enabled)
+{
+    if (modelControlEnabled_ == enabled) {
+        return;
+    }
+    modelControlEnabled_ = enabled;
+    update();
+}
+
+void OverlayWidget::setAvailableModelPaths(const QStringList &modelPaths)
+{
+    if (availableModelPaths_ == modelPaths) {
+        return;
+    }
+    availableModelPaths_ = modelPaths;
+}
+
 void OverlayWidget::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event)
@@ -167,8 +204,34 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     titleFont.setWeight(QFont::DemiBold);
     painter.setFont(titleFont);
     painter.setPen(QColor(245, 247, 250));
-    painter.drawText(QRectF(card.left() + textLeft, card.top() + titleTop, card.width() - 82, titleHeight),
-            title_);
+    const QRectF chipRect = modelChipRect(card);
+    const qreal titleLeft = card.left() + textLeft;
+    const qreal titleWidth = std::max<qreal>(80.0, chipRect.left() - titleLeft - modelChipGapToTitle);
+    painter.drawText(QRectF(titleLeft, card.top() + titleTop, titleWidth, titleHeight), title_);
+
+    painter.setPen(QPen(QColor(255, 255, 255, modelControlEnabled_ ? 44 : 30), 1));
+    painter.setBrush(QColor(32, 36, 43, modelControlEnabled_ ? 230 : 165));
+    painter.drawRoundedRect(chipRect, 6, 6);
+
+    QFont chipFont = font();
+    chipFont.setPointSize(10);
+    chipFont.setWeight(QFont::DemiBold);
+    painter.setFont(chipFont);
+    painter.setPen(QColor(220, 224, 232, modelControlEnabled_ ? 255 : 155));
+    painter.drawText(chipRect.adjusted(modelChipHorizontalPadding, 0, -(modelChipArrowWidth + 8), 0),
+            Qt::AlignVCenter | Qt::AlignLeft,
+            modelLabel_);
+
+    const qreal arrowX = chipRect.right() - modelChipArrowWidth;
+    const qreal arrowY = chipRect.center().y() - 2.0;
+    QPolygonF arrow = {
+            QPointF(arrowX - 4.0, arrowY),
+            QPointF(arrowX + 4.0, arrowY),
+            QPointF(arrowX, arrowY + 5.0),
+    };
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(220, 224, 232, modelControlEnabled_ ? 235 : 145));
+    painter.drawPolygon(arrow);
 
     if (mode_ == Mode::Error) {
         return;
@@ -194,6 +257,30 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     painter.setFont(bodyFont);
     painter.setPen(QColor(194, 200, 210));
     painter.drawText(QRectF(bar.right() + 12, bar.top() - 6, 50, 18), Qt::AlignLeft, elapsedText());
+}
+
+void OverlayWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton || mode_ == Mode::Error) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+
+    const QRectF card = rect().adjusted(8, 8, -8, -8);
+    const QRectF chipRect = modelChipRect(card);
+    if (!chipRect.contains(event->position())) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+
+    event->accept();
+    if (!modelControlEnabled_) {
+        return;
+    }
+
+    const QPoint menuPos = mapToGlobal(
+            QPoint(static_cast<int>(chipRect.left()), static_cast<int>(chipRect.bottom() + 2)));
+    showModelMenu(menuPos);
 }
 
 void OverlayWidget::resizeEvent(QResizeEvent *event)
@@ -277,4 +364,44 @@ QString OverlayWidget::elapsedText() const
     const qint64 minutes = totalSeconds / 60;
     const qint64 seconds = totalSeconds % 60;
     return QStringLiteral("%1:%2").arg(minutes).arg(seconds, 2, 10, QLatin1Char('0'));
+}
+
+QRectF OverlayWidget::modelChipRect(const QRectF &card) const
+{
+    QFont chipFont = font();
+    chipFont.setPointSize(10);
+    chipFont.setWeight(QFont::DemiBold);
+    const QFontMetrics chipMetrics(chipFont);
+    const int textWidth = chipMetrics.horizontalAdvance(modelLabel_);
+    const int chipWidth = std::clamp(
+            textWidth + modelChipHorizontalPadding * 2 + modelChipArrowWidth + 8,
+            84,
+            172);
+    const qreal chipX = card.right() - modelChipRightPadding - chipWidth;
+    const qreal chipY = card.top() + modelChipTop;
+    return QRectF(chipX, chipY, chipWidth, modelChipHeight);
+}
+
+void OverlayWidget::showModelMenu(const QPoint &globalPos)
+{
+    QMenu menu(this);
+    QAction *selectedAction = nullptr;
+    if (availableModelPaths_.isEmpty()) {
+        QAction *emptyAction = menu.addAction(QStringLiteral("No available ggml models in directory"));
+        emptyAction->setEnabled(false);
+        menu.exec(globalPos);
+        return;
+    }
+
+    for (const QString &modelPath : availableModelPaths_) {
+        QAction *action = menu.addAction(AppSettings::modelLabel(modelPath));
+        action->setData(modelPath);
+        action->setCheckable(true);
+        action->setChecked(AppSettings::modelLabel(modelPath).compare(modelLabel_, Qt::CaseInsensitive) == 0);
+    }
+
+    selectedAction = menu.exec(globalPos);
+    if (selectedAction != nullptr) {
+        emit modelSelected(selectedAction->data().toString());
+    }
 }

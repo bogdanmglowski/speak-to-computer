@@ -26,6 +26,7 @@ private slots:
     void handleTranscriptionReady(const QString &text);
     void handleTranscriptionFailed(const QString &message);
     void handleRecordingFailed(const QString &message);
+    void handleModelSelected(const QString &modelPath);
 
 private:
     enum class State {
@@ -35,6 +36,9 @@ private:
     };
 
     bool validateRuntime(QString *errorMessage) const;
+    QString fallbackModelPathForInitializationFailure() const;
+    bool applyModelSelection(const QString &selectedModelPath, QString *errorMessage);
+    bool maybeOfferModelFallback(const QString &message);
     QString nextWavPath() const;
     void showErrorAndReturnIdle(const QString &message);
     void removeCurrentWav();

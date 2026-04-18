@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMessageBox>
 #include <QStandardPaths>
 
 SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *parent)
@@ -19,10 +20,15 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&recorder_, &AudioRecorder::failed, this, &SpeakToComputerApp::handleRecordingFailed);
     connect(&whisper_, &WhisperRunner::transcriptionReady, this, &SpeakToComputerApp::handleTranscriptionReady);
     connect(&whisper_, &WhisperRunner::failed, this, &SpeakToComputerApp::handleTranscriptionFailed);
+    connect(&overlay_, &OverlayWidget::modelSelected, this, &SpeakToComputerApp::handleModelSelected);
     connect(&elapsedTimer_, &QTimer::timeout, this, [this]() {
         overlay_.setElapsedMs(recordingClock_.elapsed());
     });
     elapsedTimer_.setInterval(200);
+
+    overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
+    overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+    overlay_.setModelControlEnabled(true);
 }
 
 bool SpeakToComputerApp::start()
@@ -54,6 +60,8 @@ void SpeakToComputerApp::toggleDictation()
 
 void SpeakToComputerApp::startRecording()
 {
+    overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+
     QString errorMessage;
     if (!validateRuntime(&errorMessage)) {
         showErrorAndReturnIdle(errorMessage);
@@ -69,6 +77,7 @@ void SpeakToComputerApp::startRecording()
     state_ = State::Recording;
     recordingClock_.restart();
     elapsedTimer_.start();
+    overlay_.setModelControlEnabled(true);
     overlay_.showRecording();
     qInfo().noquote() << "recording started using audio backend" << recorder_.activeBackendName();
 }
@@ -95,6 +104,7 @@ void SpeakToComputerApp::stopRecording()
     }
 
     state_ = State::Transcribing;
+    overlay_.setModelControlEnabled(false);
     overlay_.showTranscribing();
     qInfo() << "recording stopped, transcribing";
     whisper_.transcribe(currentWavPath_, settings_);
@@ -116,6 +126,7 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
     }
 
     state_ = State::Idle;
+    overlay_.setModelControlEnabled(true);
     overlay_.showDone(QStringLiteral("Text pasted into the active window"));
     qInfo() << "transcription pasted";
     QTimer::singleShot(900, &overlay_, &OverlayWidget::hide);
@@ -123,6 +134,21 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
 
 void SpeakToComputerApp::handleTranscriptionFailed(const QString &message)
 {
+    const QString fallbackPath = fallbackModelPathForInitializationFailure();
+    const bool shouldOfferFallback =
+            message.contains(QStringLiteral("failed to initialize whisper context"), Qt::CaseInsensitive)
+            && !fallbackPath.isEmpty();
+    if (shouldOfferFallback) {
+        const QString failureMessage = message;
+        QTimer::singleShot(0, this, [this, failureMessage]() {
+            if (!maybeOfferModelFallback(failureMessage)) {
+                removeCurrentWav();
+                showErrorAndReturnIdle(failureMessage);
+            }
+        });
+        return;
+    }
+
     removeCurrentWav();
     showErrorAndReturnIdle(message);
 }
@@ -132,6 +158,18 @@ void SpeakToComputerApp::handleRecordingFailed(const QString &message)
     if (state_ == State::Recording) {
         elapsedTimer_.stop();
         showErrorAndReturnIdle(message);
+    }
+}
+
+void SpeakToComputerApp::handleModelSelected(const QString &modelPath)
+{
+    QString errorMessage;
+    if (!applyModelSelection(modelPath, &errorMessage)) {
+        if (errorMessage.isEmpty()) {
+            return;
+        }
+        qWarning().noquote() << errorMessage;
+        return;
     }
 }
 
@@ -158,6 +196,109 @@ bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const
         }
         return false;
     }
+    const QFileInfo modelFileInfo(settings_.model);
+    if (!modelFileInfo.isFile() || modelFileInfo.size() <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Whisper model is invalid or empty: %1").arg(settings_.model);
+        }
+        return false;
+    }
+    return true;
+}
+
+QString SpeakToComputerApp::fallbackModelPathForInitializationFailure() const
+{
+    const QFileInfo currentModelInfo(settings_.model);
+    if (!currentModelInfo.exists() || !currentModelInfo.isFile() || currentModelInfo.size() <= 0) {
+        return QString();
+    }
+
+    const QStringList modelPaths = AppSettings::existingModelPaths(settings_.model);
+    qint64 bestCandidateSize = -1;
+    QString bestCandidatePath;
+    for (const QString &modelPath : modelPaths) {
+        if (modelPath == settings_.model) {
+            continue;
+        }
+        const QFileInfo modelInfo(modelPath);
+        if (!modelInfo.exists() || !modelInfo.isFile() || modelInfo.size() <= 0) {
+            continue;
+        }
+        if (modelInfo.size() >= currentModelInfo.size()) {
+            continue;
+        }
+        if (modelInfo.size() > bestCandidateSize) {
+            bestCandidateSize = modelInfo.size();
+            bestCandidatePath = modelPath;
+        }
+    }
+    return bestCandidatePath;
+}
+
+bool SpeakToComputerApp::applyModelSelection(const QString &selectedModelPath, QString *errorMessage)
+{
+    if (selectedModelPath.isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Model selection is invalid.");
+        }
+        return false;
+    }
+    if (selectedModelPath == settings_.model) {
+        if (errorMessage != nullptr) {
+            errorMessage->clear();
+        }
+        return false;
+    }
+    if (!AppSettings::saveModel(settings_.settingsPath, selectedModelPath, errorMessage)) {
+        return false;
+    }
+
+    settings_.model = selectedModelPath;
+    overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
+    overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+    qInfo().noquote() << "selected whisper model" << settings_.model;
+    return true;
+}
+
+bool SpeakToComputerApp::maybeOfferModelFallback(const QString &message)
+{
+    if (!message.contains(QStringLiteral("failed to initialize whisper context"), Qt::CaseInsensitive)) {
+        return false;
+    }
+
+    const QString fallbackPath = fallbackModelPathForInitializationFailure();
+    if (fallbackPath.isEmpty()) {
+        return false;
+    }
+
+    const QString fallbackLabel = AppSettings::modelLabel(fallbackPath);
+    const QString prompt = QStringLiteral(
+            "Whisper could not initialize model \"%1\".\n\n"
+            "Do you want to switch to \"%2\" for the next recording?")
+                                   .arg(AppSettings::modelLabel(settings_.model), fallbackLabel);
+    const QMessageBox::StandardButton choice = QMessageBox::question(
+            nullptr,
+            QStringLiteral("Retry with smaller model"),
+            prompt,
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::Yes);
+    if (choice != QMessageBox::Yes) {
+        return false;
+    }
+
+    QString errorMessage;
+    if (!applyModelSelection(fallbackPath, &errorMessage)) {
+        if (!errorMessage.isEmpty()) {
+            qWarning().noquote() << errorMessage;
+        }
+        return false;
+    }
+
+    removeCurrentWav();
+    state_ = State::Idle;
+    overlay_.setModelControlEnabled(true);
+    overlay_.showDone(QStringLiteral("Switched to %1. Press hotkey to retry.").arg(fallbackLabel));
+    QTimer::singleShot(1400, &overlay_, &OverlayWidget::hide);
     return true;
 }
 
@@ -173,6 +314,7 @@ QString SpeakToComputerApp::nextWavPath() const
 void SpeakToComputerApp::showErrorAndReturnIdle(const QString &message)
 {
     state_ = State::Idle;
+    overlay_.setModelControlEnabled(true);
     overlay_.showError(message);
 }
 

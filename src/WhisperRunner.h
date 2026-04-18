@@ -10,6 +10,7 @@ class WhisperRunner : public QObject {
 
 public:
     explicit WhisperRunner(QObject *parent = nullptr);
+    ~WhisperRunner() override;
 
     void transcribe(const QString &wavPath, const AppSettings &settings);
 
@@ -18,5 +19,8 @@ signals:
     void failed(const QString &message);
 
 private:
+    QString currentWhisperCliPath_;
+    QString currentModelPath_;
+    QString currentWavPath_;
     QProcess process_;
 };
