@@ -85,6 +85,52 @@ older or different CPUs than the build machine.
 Consider using `-DGGML_CUDA=1` or `-DGGML_VULKAN=1` for GPU builds.
 For more information, see the https://github.com/ggml-org/whisper.cpp
 
+#### Building for NVIDIA GPU (Recommended for faster transcription)
+
+If you have an NVIDIA GPU, building with CUDA support provides significantly faster transcription performance compared to CPU-only builds. GPU acceleration can reduce transcription time by 3-10x depending on your hardware.
+
+**Prerequisites:**
+- NVIDIA GPU with CUDA support
+- NVIDIA drivers installed
+- CUDA Toolkit 13.x installed
+
+**Install CUDA Toolkit (Ubuntu/Debian):**
+
+```bash
+# Download and install CUDA repository
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-ubuntu2404.pin
+sudo mv cuda-ubuntu2404.pin /etc/apt/preferences.d/cuda-repository-pin-600
+wget https://developer.download.nvidia.com/compute/cuda/13.2.1/local_installers/cuda-repo-ubuntu2404-13-2-local_13.2.1-595.58.03-1_amd64.deb
+sudo dpkg -i cuda-repo-ubuntu2404-13-2-local_13.2.1-595.58.03-1_amd64.deb
+sudo cp /var/cuda-repo-ubuntu2404-13-2-local/cuda-*-keyring.gpg /usr/share/keyrings/
+sudo apt-get update
+sudo apt-get -y install cuda-toolkit-13-2
+```
+
+**Add CUDA to your PATH (add to ~/.bashrc or ~/.zshrc):**
+
+```bash
+export PATH=/usr/local/cuda-13.2/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64:$LD_LIBRARY_PATH
+```
+
+Then reload your shell: `source ~/.bashrc` (or `~/.zshrc`)
+
+**Build whisper.cpp with CUDA:**
+
+```bash
+cd ~/whisper.cpp
+rm -rf build  # Clean previous build
+cmake -B build -DGGML_CUDA=1 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+cmake --build build -j --config Release
+```
+
+The build will automatically detect your GPU architecture. Verify CUDA is working:
+
+```bash
+nvidia-smi  # Should show your GPU
+```
+
 #### Download the default multilingual `small` model:
 
 ```bash
