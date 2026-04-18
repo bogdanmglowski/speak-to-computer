@@ -3,6 +3,7 @@
 #include <QSocketNotifier>
 
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>
 #include <X11/keysym.h>
 
 namespace {
@@ -58,6 +59,61 @@ bool matchesHotkey(const XKeyEvent &event, unsigned int keycode, unsigned int mo
 {
     constexpr unsigned int ignoredModifiers = LockMask | Mod2Mask;
     return event.keycode == keycode && (event.state & ~ignoredModifiers) == modifiers;
+}
+
+Window readActiveWindowFromRoot(Display *display)
+{
+    const Atom activeWindowAtom = XInternAtom(display, "_NET_ACTIVE_WINDOW", True);
+    if (activeWindowAtom == None) {
+        return 0;
+    }
+
+    Atom actualType = None;
+    int actualFormat = 0;
+    unsigned long itemCount = 0;
+    unsigned long bytesAfter = 0;
+    unsigned char *propertyData = nullptr;
+    const int status = XGetWindowProperty(display, DefaultRootWindow(display), activeWindowAtom, 0, 1, False,
+            XA_WINDOW, &actualType, &actualFormat, &itemCount, &bytesAfter, &propertyData);
+    if (status != Success || actualType != XA_WINDOW || actualFormat != 32 || itemCount != 1
+            || propertyData == nullptr) {
+        if (propertyData != nullptr) {
+            XFree(propertyData);
+        }
+        return 0;
+    }
+
+    const Window activeWindow = *reinterpret_cast<Window *>(propertyData);
+    XFree(propertyData);
+    return activeWindow;
+}
+
+Window topLevelAncestor(Display *display, Window window)
+{
+    if (window == None || window == PointerRoot || window == 0) {
+        return 0;
+    }
+
+    Window current = window;
+    while (true) {
+        Window root = 0;
+        Window parent = 0;
+        Window *children = nullptr;
+        unsigned int childCount = 0;
+        if (XQueryTree(display, current, &root, &parent, &children, &childCount) == 0) {
+            if (children != nullptr) {
+                XFree(children);
+            }
+            return current;
+        }
+        if (children != nullptr) {
+            XFree(children);
+        }
+        if (parent == 0 || parent == root) {
+            return current;
+        }
+        current = parent;
+    }
 }
 
 } // namespace
@@ -146,13 +202,19 @@ quint64 X11Hotkey::activeWindow() const
         return 0;
     }
 
+    const Window activeWindow = readActiveWindowFromRoot(display_);
+    if (activeWindow != 0 && activeWindow != None && activeWindow != PointerRoot) {
+        return static_cast<quint64>(activeWindow);
+    }
+
     Window focused = 0;
     int revertTo = 0;
     XGetInputFocus(display_, &focused, &revertTo);
-    if (focused == None || focused == PointerRoot) {
+    const Window topLevelFocused = topLevelAncestor(display_, focused);
+    if (topLevelFocused == 0 || topLevelFocused == None || topLevelFocused == PointerRoot) {
         return 0;
     }
-    return static_cast<quint64>(focused);
+    return static_cast<quint64>(topLevelFocused);
 }
 
 void X11Hotkey::drainEvents()
