@@ -17,7 +17,6 @@ This is not a production-ready project, but it turned out to be somewhat useful,
 ## Future ideas
 
 Things I’d like to experiment with next:
-- system tray support (run in background)
 - automatic translation (PL speech → EN text, etc.)
 - better logging + basic transcription history
 
@@ -197,6 +196,39 @@ QT_LOGGING_RULES='*.info=true' ./build-speak-to-computer/speak-to-computer
 Press `Super+Space` to start recording. Press the same hotkey again to stop
 recording, transcribe, and paste the text into the window that was active when
 recording started.
+
+The app runs in the background and exposes a system tray icon. Right-click the
+tray icon and choose `Quit` to stop it.
+
+## Install Autostart
+
+Use this when you want the app to start when you log in:
+
+```bash
+cd $APP_LOCATION/speak-to-computer
+./scripts/install-autostart.sh
+```
+
+The install script copies the freshly built binary to:
+
+```bash
+~/.local/bin/speak-to-computer
+```
+
+It also writes:
+
+```bash
+~/.local/share/applications/speak-to-computer.desktop
+~/.config/autostart/speak-to-computer.desktop
+~/.local/share/icons/hicolor/scalable/apps/speak-to-computer.svg
+```
+
+The script does not start or restart the app. Run it once manually after install,
+or let it start on your next login:
+
+```bash
+~/.local/bin/speak-to-computer
+```
 
 ## Settings
 
