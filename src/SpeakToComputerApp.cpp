@@ -2,14 +2,62 @@
 
 #include "WavWriter.h"
 
+#include <QAction>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIcon>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPixmap>
 #include <QStandardPaths>
+#include <QSystemTrayIcon>
+
+namespace {
+
+QIcon createApplicationIcon()
+{
+    QIcon icon;
+    for (const int size : {16, 24, 32, 48, 64, 128}) {
+        const qreal unit = static_cast<qreal>(size) / 64.0;
+        QPixmap pixmap(size, size);
+        pixmap.fill(Qt::transparent);
+
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRectF background(4.0 * unit, 4.0 * unit, 56.0 * unit, 56.0 * unit);
+        painter.setPen(QPen(QColor(255, 255, 255, 55), 2.0 * unit));
+        painter.setBrush(QColor(22, 24, 28));
+        painter.drawRoundedRect(background, 12.0 * unit, 12.0 * unit);
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(229, 70, 78));
+        painter.drawEllipse(QPointF(32.0 * unit, 32.0 * unit), 20.0 * unit, 20.0 * unit);
+
+        painter.setBrush(QColor(245, 247, 250));
+        painter.drawRoundedRect(QRectF(24.0 * unit, 13.0 * unit, 16.0 * unit, 27.0 * unit),
+                8.0 * unit,
+                8.0 * unit);
+
+        painter.setPen(QPen(QColor(245, 247, 250), 4.0 * unit, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(32.0 * unit, 40.0 * unit), QPointF(32.0 * unit, 50.0 * unit));
+        painter.drawLine(QPointF(24.0 * unit, 50.0 * unit), QPointF(40.0 * unit, 50.0 * unit));
+
+        painter.setPen(QPen(QColor(22, 24, 28), 3.0 * unit, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(29.0 * unit, 21.0 * unit), QPointF(35.0 * unit, 21.0 * unit));
+        painter.drawLine(QPointF(29.0 * unit, 28.0 * unit), QPointF(35.0 * unit, 28.0 * unit));
+
+        icon.addPixmap(pixmap);
+    }
+    return icon;
+}
+
+} // namespace
 
 SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *parent)
     : QObject(parent)
@@ -29,6 +77,8 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
     overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
     overlay_.setModelControlEnabled(true);
+
+    setupTrayIcon();
 }
 
 bool SpeakToComputerApp::start()
@@ -37,10 +87,14 @@ bool SpeakToComputerApp::start()
     if (!hotkey_.registerHotkey(settings_.hotkey, &errorMessage)) {
         qWarning().noquote() << errorMessage;
         overlay_.showError(errorMessage);
+        trayStatusOverride_ = QStringLiteral("Error: %1").arg(errorMessage);
+        updateTrayStatus();
         return false;
     }
     qInfo().noquote() << "speak-to-computer listening for" << settings_.hotkey;
     qInfo().noquote() << "settings:" << settings_.settingsPath;
+    trayStatusOverride_.clear();
+    updateTrayStatus();
     return true;
 }
 
@@ -60,6 +114,7 @@ void SpeakToComputerApp::toggleDictation()
 
 void SpeakToComputerApp::startRecording()
 {
+    trayStatusOverride_.clear();
     overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
 
     QString errorMessage;
@@ -79,11 +134,13 @@ void SpeakToComputerApp::startRecording()
     elapsedTimer_.start();
     overlay_.setModelControlEnabled(true);
     overlay_.showRecording();
+    updateTrayStatus();
     qInfo().noquote() << "recording started using audio backend" << recorder_.activeBackendName();
 }
 
 void SpeakToComputerApp::stopRecording()
 {
+    trayStatusOverride_.clear();
     elapsedTimer_.stop();
 
     QString errorMessage;
@@ -106,6 +163,7 @@ void SpeakToComputerApp::stopRecording()
     state_ = State::Transcribing;
     overlay_.setModelControlEnabled(false);
     overlay_.showTranscribing();
+    updateTrayStatus();
     qInfo() << "recording stopped, transcribing";
     whisper_.transcribe(currentWavPath_, settings_);
 }
@@ -126,8 +184,10 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
     }
 
     state_ = State::Idle;
+    trayStatusOverride_.clear();
     overlay_.setModelControlEnabled(true);
     overlay_.showDone(QStringLiteral("Text pasted into the active window"));
+    updateTrayStatus();
     qInfo() << "transcription pasted";
     QTimer::singleShot(900, &overlay_, &OverlayWidget::hide);
 }
@@ -296,8 +356,10 @@ bool SpeakToComputerApp::maybeOfferModelFallback(const QString &message)
 
     removeCurrentWav();
     state_ = State::Idle;
+    trayStatusOverride_.clear();
     overlay_.setModelControlEnabled(true);
     overlay_.showDone(QStringLiteral("Switched to %1. Press hotkey to retry.").arg(fallbackLabel));
+    updateTrayStatus();
     QTimer::singleShot(1400, &overlay_, &OverlayWidget::hide);
     return true;
 }
@@ -311,11 +373,65 @@ QString SpeakToComputerApp::nextWavPath() const
     return QDir(tempRoot).filePath(fileName);
 }
 
+QString SpeakToComputerApp::trayStatusText() const
+{
+    if (!trayStatusOverride_.isEmpty()) {
+        return trayStatusOverride_;
+    }
+
+    if (state_ == State::Recording) {
+        return QStringLiteral("Recording. Press %1 to finish.").arg(settings_.hotkey);
+    }
+    if (state_ == State::Transcribing) {
+        return QStringLiteral("Transcribing.");
+    }
+    return QStringLiteral("Ready. Press %1 to dictate.").arg(settings_.hotkey);
+}
+
+void SpeakToComputerApp::setupTrayIcon()
+{
+    const QIcon icon = createApplicationIcon();
+    QApplication::setWindowIcon(icon);
+    overlay_.setWindowIcon(icon);
+
+    trayStatusAction_ = trayMenu_.addAction(trayStatusText());
+    trayStatusAction_->setEnabled(false);
+    trayMenu_.addSeparator();
+    trayQuitAction_ = trayMenu_.addAction(QStringLiteral("Quit"));
+    connect(trayQuitAction_, &QAction::triggered, this, &SpeakToComputerApp::quitApplication);
+
+    trayIcon_.setIcon(icon);
+    trayIcon_.setContextMenu(&trayMenu_);
+    trayIcon_.show();
+
+    if (!QSystemTrayIcon::isSystemTrayAvailable()) {
+        qWarning() << "No system tray is currently available.";
+    }
+    updateTrayStatus();
+}
+
+void SpeakToComputerApp::updateTrayStatus()
+{
+    const QString status = trayStatusText();
+    if (trayStatusAction_ != nullptr) {
+        trayStatusAction_->setText(status);
+    }
+    trayIcon_.setToolTip(QStringLiteral("Speak to Computer\n%1").arg(status));
+}
+
 void SpeakToComputerApp::showErrorAndReturnIdle(const QString &message)
 {
     state_ = State::Idle;
+    trayStatusOverride_ = QStringLiteral("Error: %1").arg(message);
     overlay_.setModelControlEnabled(true);
     overlay_.showError(message);
+    updateTrayStatus();
+}
+
+void SpeakToComputerApp::quitApplication()
+{
+    trayIcon_.hide();
+    QCoreApplication::quit();
 }
 
 void SpeakToComputerApp::removeCurrentWav()

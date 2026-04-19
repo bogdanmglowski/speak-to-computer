@@ -8,8 +8,12 @@
 #include "X11Hotkey.h"
 
 #include <QElapsedTimer>
+#include <QMenu>
 #include <QObject>
+#include <QSystemTrayIcon>
 #include <QTimer>
+
+class QAction;
 
 class SpeakToComputerApp : public QObject {
     Q_OBJECT
@@ -27,6 +31,7 @@ private slots:
     void handleTranscriptionFailed(const QString &message);
     void handleRecordingFailed(const QString &message);
     void handleModelSelected(const QString &modelPath);
+    void quitApplication();
 
 private:
     enum class State {
@@ -40,6 +45,9 @@ private:
     bool applyModelSelection(const QString &selectedModelPath, QString *errorMessage);
     bool maybeOfferModelFallback(const QString &message);
     QString nextWavPath() const;
+    QString trayStatusText() const;
+    void setupTrayIcon();
+    void updateTrayStatus();
     void showErrorAndReturnIdle(const QString &message);
     void removeCurrentWav();
 
@@ -49,10 +57,15 @@ private:
     AudioRecorder recorder_;
     WhisperRunner whisper_;
     ClipboardPaster paster_;
+    QMenu trayMenu_;
+    QSystemTrayIcon trayIcon_;
     QTimer elapsedTimer_;
     QElapsedTimer recordingClock_;
     QElapsedTimer hotkeyDebounce_;
+    QAction *trayStatusAction_ = nullptr;
+    QAction *trayQuitAction_ = nullptr;
     State state_ = State::Idle;
     quint64 targetWindow_ = 0;
     QString currentWavPath_;
+    QString trayStatusOverride_;
 };
