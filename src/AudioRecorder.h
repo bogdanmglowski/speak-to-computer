@@ -20,6 +20,7 @@ class AudioRecorder : public QObject {
 
 public:
     explicit AudioRecorder(QObject *parent = nullptr);
+    ~AudioRecorder() override;
 
     bool start(const QString &requestedBackend, QString *errorMessage);
     bool start(QString *errorMessage);

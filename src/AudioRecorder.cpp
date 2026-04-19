@@ -148,6 +148,20 @@ AudioRecorder::AudioRecorder(QObject *parent)
     connect(&process_, &QProcess::errorOccurred, this, &AudioRecorder::handleProcessError);
 }
 
+AudioRecorder::~AudioRecorder()
+{
+    if (process_.state() == QProcess::NotRunning) {
+        return;
+    }
+
+    stopping_ = true;
+    process_.terminate();
+    if (!process_.waitForFinished(1500)) {
+        process_.kill();
+        process_.waitForFinished(1000);
+    }
+}
+
 bool AudioRecorder::start(QString *errorMessage)
 {
     return start(QStringLiteral("auto"), errorMessage);
