@@ -30,6 +30,8 @@ add_executable(speak-to-computer
     src/X11Hotkey.cpp
     src/X11Hotkey.h
     src/main.cpp
+    src/activation_sound.wav
+    src/end_sound.wav
 )
 
 target_compile_definitions(speak-to-computer PRIVATE
@@ -46,6 +48,15 @@ target_link_libraries(speak-to-computer PRIVATE
     Qt6::Gui
     Qt6::Widgets
     ${X11_LIBRARIES}
+)
+
+add_custom_command(TARGET speak-to-computer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/activation_sound.wav
+    $<TARGET_FILE_DIR:speak-to-computer>
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/end_sound.wav
+    $<TARGET_FILE_DIR:speak-to-computer>
 )
 
 if(BUILD_TESTING)

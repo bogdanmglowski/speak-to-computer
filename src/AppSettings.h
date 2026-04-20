@@ -10,6 +10,8 @@ struct AppSettings {
     QString language;
     QString whisperCli;
     QString model;
+    QString activationSound;
+    QString endSound;
     int threads = 12;
     bool translateToEn = false;
 

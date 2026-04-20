@@ -1,0 +1,19 @@
+[General]
+audio_backend=auto
+hotkey=Super+Space
+language=pl
+model=/home/bmocior/dev/speek/whisper.cpp/models/ggml-large-v3-turbo.bin
+threads=12
+whisper_cli=/home/bmocior/dev/speek/whisper.cpp/build/bin/whisper-cli
+
+# activation_sound - sound played when recording starts (before UI appears)
+#   - absolute path: /full/path/to/sound.wav
+#   - relative path: sound.wav (searched in application directory, next to the binary)
+#   - empty/unspecified: defaults to activation_sound.wav next to binary
+#   - file must exist, otherwise skipped silently
+# activation_sound=activation_sound.wav
+
+# end_sound - sound played when recording stops (before transcription starts)
+#   - same path resolution as activation_sound
+#   - file must exist, otherwise skipped silently
+# end_sound=end_sound.wav
