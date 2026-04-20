@@ -19,7 +19,6 @@ This is not a production-ready project, but it turned out to be somewhat useful,
 Things I’d like to experiment with next:
 - make the sys tray icon transparent
 - add TLDR fast install instructions to the README
-- automatic translation (PL speech → EN text, etc.)
 - better logging + basic transcription history
 
 
@@ -246,6 +245,7 @@ Supported settings:
 hotkey=Super+Space
 audio_backend=auto
 language=pl
+translate-to-en=false
 threads=12
 whisper_cli=~/whisper.cpp/build/bin/whisper-cli
 model=~/whisper.cpp/models/ggml-small.bin
@@ -253,6 +253,9 @@ model=~/whisper.cpp/models/ggml-small.bin
 
 Set `language=auto` to let Whisper detect the spoken language. Use `language=en`
 for English-only dictation.
+
+Set `translate-to-en=true` to translate the spoken language to English before
+pasting.
 
 `audio_backend=auto` picks the first available recorder in this order:
 `pw-record`, `parec`, `parecord`, then `arecord`. You can force a backend with
