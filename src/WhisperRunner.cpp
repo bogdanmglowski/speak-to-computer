@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QProcessEnvironment>
+#include <QStringList>
 
 namespace {
 
@@ -113,9 +114,7 @@ void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settin
     }
     environment.insert(QStringLiteral("LD_LIBRARY_PATH"), libraryPaths.join(QLatin1Char(':')));
 
-    process_.setProcessEnvironment(environment);
-    process_.setProgram(settings.whisperCli);
-    process_.setArguments({
+    QStringList arguments = {
             QStringLiteral("-m"),
             settings.model,
             QStringLiteral("-f"),
@@ -126,7 +125,14 @@ void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settin
             QString::number(settings.threads),
             QStringLiteral("-np"),
             QStringLiteral("-nt"),
-    });
+    };
+    if (settings.translateToEn) {
+        arguments << QStringLiteral("-tr");
+    }
+
+    process_.setProcessEnvironment(environment);
+    process_.setProgram(settings.whisperCli);
+    process_.setArguments(arguments);
     process_.setWorkingDirectory(whisperCli.absolutePath());
     process_.setProcessChannelMode(QProcess::SeparateChannels);
     currentWhisperCliPath_ = settings.whisperCli;
