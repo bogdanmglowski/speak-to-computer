@@ -35,6 +35,15 @@ QString modelDirectoryPathFor(const QString &currentModelPath)
     return modelDirectory;
 }
 
+bool readBooleanSetting(const QSettings &settings, const QString &key)
+{
+    const QString normalized = settings.value(key).toString().trimmed().toLower();
+    return normalized == QStringLiteral("true")
+            || normalized == QStringLiteral("1")
+            || normalized == QStringLiteral("yes")
+            || normalized == QStringLiteral("on");
+}
+
 void ensureDefaults(QSettings *settings)
 {
     if (!settings->contains(QStringLiteral("hotkey"))) {
@@ -42,6 +51,9 @@ void ensureDefaults(QSettings *settings)
     }
     if (!settings->contains(QStringLiteral("language"))) {
         settings->setValue(QStringLiteral("language"), QStringLiteral("pl"));
+    }
+    if (!settings->contains(QStringLiteral("translate-to-en"))) {
+        settings->setValue(QStringLiteral("translate-to-en"), false);
     }
     if (!settings->contains(QStringLiteral("audio_backend"))) {
         settings->setValue(QStringLiteral("audio_backend"), QStringLiteral("auto"));
@@ -123,22 +135,27 @@ bool AppSettings::saveModel(const QString &settingsPath, const QString &modelPat
     return false;
 }
 
-AppSettings AppSettings::load()
+AppSettings AppSettings::loadFromPath(const QString &settingsPath)
 {
-    const QString path = settingsFilePath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
+    QDir().mkpath(QFileInfo(settingsPath).absolutePath());
 
-    QSettings settings(path, QSettings::IniFormat);
+    QSettings settings(settingsPath, QSettings::IniFormat);
     ensureDefaults(&settings);
     settings.sync();
 
     AppSettings result;
-    result.settingsPath = path;
+    result.settingsPath = settingsPath;
     result.hotkey = settings.value(QStringLiteral("hotkey")).toString();
     result.audioBackend = settings.value(QStringLiteral("audio_backend")).toString();
     result.language = settings.value(QStringLiteral("language")).toString();
     result.threads = settings.value(QStringLiteral("threads")).toInt();
+    result.translateToEn = readBooleanSetting(settings, QStringLiteral("translate-to-en"));
     result.whisperCli = expandUserPath(settings.value(QStringLiteral("whisper_cli")).toString());
     result.model = expandUserPath(settings.value(QStringLiteral("model")).toString());
     return result;
+}
+
+AppSettings AppSettings::load()
+{
+    return loadFromPath(settingsFilePath());
 }
