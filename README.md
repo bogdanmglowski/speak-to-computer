@@ -209,10 +209,12 @@ cd $APP_LOCATION/speak-to-computer
 ./scripts/install-autostart.sh
 ```
 
-The install script copies the freshly built binary to:
+The install script copies the freshly built binary and default notification sounds to:
 
 ```bash
 ~/.local/bin/speak-to-computer
+~/.local/bin/activation_sound.wav
+~/.local/bin/end_sound.wav
 ```
 
 It also writes:
