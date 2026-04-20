@@ -2,6 +2,7 @@
 #include "AudioRecorder.h"
 #include "TranscriptCleaner.h"
 #include "WavWriter.h"
+#include "WhisperRunner.h"
 
 #include <QDir>
 #include <QFile>
@@ -17,7 +18,11 @@ private slots:
     void settingsShouldResolveModelLabel();
     void settingsShouldReturnOnlyExistingModelPaths();
     void settingsShouldSaveModelPath();
+    void settingsShouldLoadTranslateToEnglishDefaultFalse();
+    void settingsShouldLoadTranslateToEnglishExplicitTrue();
     void cleanupShouldTrimAndJoinTranscriptLines();
+    void whisperRunnerShouldPassTranslateFlagWhenEnabled();
+    void whisperRunnerShouldOmitTranslateFlagWhenDisabled();
     void wavWriterShouldWritePcm16MonoHeader();
     void recorderAutoShouldPickFirstAvailableBackend();
     void recorderPulseaudioShouldUseParecOrParecord();
@@ -28,20 +33,25 @@ private slots:
 
 namespace {
 
-QString createExecutable(QTemporaryDir *dir, const QString &name)
+QString createExecutable(QTemporaryDir *dir, const QString &name, const QByteArray &content)
 {
     const QString path = dir->filePath(name);
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return QString();
     }
-    file.write("#!/bin/sh\nexit 0\n");
+    file.write(content);
     file.close();
     QFile::setPermissions(path,
             QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner |
                     QFile::ReadGroup | QFile::ExeGroup |
                     QFile::ReadOther | QFile::ExeOther);
     return path;
+}
+
+QString createExecutable(QTemporaryDir *dir, const QString &name)
+{
+    return createExecutable(dir, name, "#!/bin/sh\nexit 0\n");
 }
 
 QString createFile(QTemporaryDir *dir, const QString &name, const QByteArray &content)
@@ -113,11 +123,125 @@ void CoreBehaviorTest::settingsShouldSaveModelPath()
     QCOMPARE(settings.value(QStringLiteral("model")).toString(), QStringLiteral("/tmp/ggml-medium.bin"));
 }
 
+void CoreBehaviorTest::settingsShouldLoadTranslateToEnglishDefaultFalse()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QCOMPARE(settings.translateToEn, false);
+
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    QVERIFY(storedSettings.contains(QStringLiteral("translate-to-en")));
+    QCOMPARE(storedSettings.value(QStringLiteral("translate-to-en")).toBool(), false);
+
+    storedSettings.setValue(QStringLiteral("translate-to-en"), QStringLiteral("false"));
+    storedSettings.sync();
+    QCOMPARE(AppSettings::loadFromPath(settingsPath).translateToEn, false);
+}
+
+void CoreBehaviorTest::settingsShouldLoadTranslateToEnglishExplicitTrue()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("translate-to-en"), QStringLiteral("true"));
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QCOMPARE(settings.translateToEn, true);
+}
+
 void CoreBehaviorTest::cleanupShouldTrimAndJoinTranscriptLines()
 {
     const QString raw = QStringLiteral("  To jest test.  \n\n  Druga linia. \r\n");
 
     QCOMPARE(TranscriptCleaner::cleanup(raw), QStringLiteral("To jest test. Druga linia."));
+}
+
+void CoreBehaviorTest::whisperRunnerShouldPassTranslateFlagWhenEnabled()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString argsPath = dir.filePath(QStringLiteral("whisper-args.txt"));
+    qputenv("WHISPER_TEST_ARGS", argsPath.toUtf8());
+
+    const QByteArray script =
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$@\" > \"$WHISPER_TEST_ARGS\"\n"
+            "printf '  translated text.  \\n\\n'\n"
+            "exit 0\n";
+    const QString whisperCli = createExecutable(&dir, QStringLiteral("whisper-cli"), script);
+    QVERIFY(!whisperCli.isEmpty());
+
+    AppSettings settings;
+    settings.whisperCli = whisperCli;
+    settings.model = createFile(&dir, QStringLiteral("ggml-small.bin"));
+    settings.language = QStringLiteral("pl");
+    settings.threads = 2;
+    settings.translateToEn = true;
+    const QString wavPath = createFile(&dir, QStringLiteral("recording.wav"));
+
+    WhisperRunner runner;
+    QSignalSpy readySpy(&runner, &WhisperRunner::transcriptionReady);
+    QSignalSpy failedSpy(&runner, &WhisperRunner::failed);
+    runner.transcribe(wavPath, settings);
+
+    QVERIFY2(readySpy.wait(5000),
+            qPrintable(failedSpy.isEmpty() ? QStringLiteral("Timed out waiting for whisper output")
+                                           : failedSpy.first().at(0).toString()));
+    QCOMPARE(readySpy.first().at(0).toString(), QStringLiteral("translated text."));
+
+    QFile argsFile(argsPath);
+    QVERIFY(argsFile.open(QIODevice::ReadOnly));
+    const QStringList args = QString::fromUtf8(argsFile.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    QVERIFY2(args.contains(QStringLiteral("-tr")), qPrintable(args.join(QLatin1Char(' '))));
+}
+
+void CoreBehaviorTest::whisperRunnerShouldOmitTranslateFlagWhenDisabled()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString argsPath = dir.filePath(QStringLiteral("whisper-args.txt"));
+    qputenv("WHISPER_TEST_ARGS", argsPath.toUtf8());
+
+    const QByteArray script =
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$@\" > \"$WHISPER_TEST_ARGS\"\n"
+            "printf '  source text.  \\n\\n'\n"
+            "exit 0\n";
+    const QString whisperCli = createExecutable(&dir, QStringLiteral("whisper-cli"), script);
+    QVERIFY(!whisperCli.isEmpty());
+
+    AppSettings settings;
+    settings.whisperCli = whisperCli;
+    settings.model = createFile(&dir, QStringLiteral("ggml-small.bin"));
+    settings.language = QStringLiteral("pl");
+    settings.threads = 2;
+    settings.translateToEn = false;
+    const QString wavPath = createFile(&dir, QStringLiteral("recording.wav"));
+
+    WhisperRunner runner;
+    QSignalSpy readySpy(&runner, &WhisperRunner::transcriptionReady);
+    QSignalSpy failedSpy(&runner, &WhisperRunner::failed);
+    runner.transcribe(wavPath, settings);
+
+    QVERIFY2(readySpy.wait(5000),
+            qPrintable(failedSpy.isEmpty() ? QStringLiteral("Timed out waiting for whisper output")
+                                           : failedSpy.first().at(0).toString()));
+    QCOMPARE(readySpy.first().at(0).toString(), QStringLiteral("source text."));
+
+    QFile argsFile(argsPath);
+    QVERIFY(argsFile.open(QIODevice::ReadOnly));
+    const QStringList args = QString::fromUtf8(argsFile.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    QVERIFY2(!args.contains(QStringLiteral("-tr")), qPrintable(args.join(QLatin1Char(' '))));
 }
 
 void CoreBehaviorTest::wavWriterShouldWritePcm16MonoHeader()
