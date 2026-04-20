@@ -116,6 +116,22 @@ export LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64:$LD_LIBRARY_PATH
 
 Then reload your shell: `source ~/.bashrc` (or `~/.zshrc`)
 
+
+**Install CUDA Toolkit (Fedora):**
+```bash
+
+sudo dnf config-manager addrepo \
+    --from-repofile=https://developer.download.nvidia.com/compute/cuda/repos/fedora43/x86_64/cuda-fedora43.repo
+sudo dnf clean expire-cache
+sudo dnf makecache
+sudo dnf install cuda-toolkit
+
+echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.zshrc
+source ~/.zshrc
+```
+Then reload your shell: `source ~/.zshrc`
+
+
 **Build whisper.cpp with CUDA:**
 
 ```bash
