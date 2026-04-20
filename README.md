@@ -19,6 +19,7 @@ This is not a production-ready project, but it turned out to be somewhat useful,
 Things I’d like to experiment with next:
 - make the sys tray icon transparent
 - add TLDR fast install instructions to the README
+- add additional shortcuts for translation mode
 - better logging + basic transcription history
 
 
