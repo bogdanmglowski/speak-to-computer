@@ -14,6 +14,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
+#include <QProcess>
 #include <QStandardPaths>
 #include <QSystemTrayIcon>
 
@@ -133,6 +134,7 @@ void SpeakToComputerApp::startRecording()
     recordingClock_.restart();
     elapsedTimer_.start();
     overlay_.setModelControlEnabled(true);
+    playActivationSound();
     overlay_.showRecording();
     updateTrayStatus();
     qInfo().noquote() << "recording started using audio backend" << recorder_.activeBackendName();
@@ -142,6 +144,7 @@ void SpeakToComputerApp::stopRecording()
 {
     trayStatusOverride_.clear();
     elapsedTimer_.stop();
+    playEndSound();
 
     QString errorMessage;
     const QByteArray pcm = recorder_.stop(&errorMessage);
@@ -440,4 +443,36 @@ void SpeakToComputerApp::removeCurrentWav()
         QFile::remove(currentWavPath_);
         currentWavPath_.clear();
     }
+}
+
+void SpeakToComputerApp::playActivationSound()
+{
+    if (settings_.activationSound.isEmpty()) {
+        return;
+    }
+    QString resolvedPath = settings_.activationSound;
+    if (!QFileInfo(resolvedPath).isAbsolute()) {
+        resolvedPath = QCoreApplication::applicationDirPath() + QStringLiteral("/") + resolvedPath;
+    }
+    if (!QFileInfo::exists(resolvedPath)) {
+        qWarning().noquote() << "activation sound not found:" << resolvedPath;
+        return;
+    }
+    QProcess::startDetached(QStringLiteral("ffplay"), {QStringLiteral("-nodisp"), QStringLiteral("-autoexit"), QStringLiteral("-volume"), QStringLiteral("50"), resolvedPath});
+}
+
+void SpeakToComputerApp::playEndSound()
+{
+    if (settings_.endSound.isEmpty()) {
+        return;
+    }
+    QString resolvedPath = settings_.endSound;
+    if (!QFileInfo(resolvedPath).isAbsolute()) {
+        resolvedPath = QCoreApplication::applicationDirPath() + QStringLiteral("/") + resolvedPath;
+    }
+    if (!QFileInfo::exists(resolvedPath)) {
+        qWarning().noquote() << "end sound not found:" << resolvedPath;
+        return;
+    }
+    QProcess::startDetached(QStringLiteral("ffplay"), {QStringLiteral("-nodisp"), QStringLiteral("-autoexit"), QStringLiteral("-volume"), QStringLiteral("50"), resolvedPath});
 }

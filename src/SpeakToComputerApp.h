@@ -50,6 +50,8 @@ private:
     void updateTrayStatus();
     void showErrorAndReturnIdle(const QString &message);
     void removeCurrentWav();
+    void playActivationSound();
+    void playEndSound();
 
     AppSettings settings_;
     X11Hotkey hotkey_;

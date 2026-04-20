@@ -19,6 +19,16 @@ QString defaultModel()
     return QDir::home().filePath(QStringLiteral("whisper.cpp/models/ggml-small.bin"));
 }
 
+QString bundledActivationSound()
+{
+    return QStringLiteral("activation_sound.wav");
+}
+
+QString bundledEndSound()
+{
+    return QStringLiteral("end_sound.wav");
+}
+
 QString settingsFilePath()
 {
     const QString configRoot = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
@@ -66,6 +76,12 @@ void ensureDefaults(QSettings *settings)
     }
     if (!settings->contains(QStringLiteral("model"))) {
         settings->setValue(QStringLiteral("model"), defaultModel());
+    }
+    if (!settings->contains(QStringLiteral("activation_sound"))) {
+        settings->setValue(QStringLiteral("activation_sound"), bundledActivationSound());
+    }
+    if (!settings->contains(QStringLiteral("end_sound"))) {
+        settings->setValue(QStringLiteral("end_sound"), bundledEndSound());
     }
 }
 
@@ -152,6 +168,8 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     result.translateToEn = readBooleanSetting(settings, QStringLiteral("translate-to-en"));
     result.whisperCli = expandUserPath(settings.value(QStringLiteral("whisper_cli")).toString());
     result.model = expandUserPath(settings.value(QStringLiteral("model")).toString());
+    result.activationSound = expandUserPath(settings.value(QStringLiteral("activation_sound")).toString());
+    result.endSound = expandUserPath(settings.value(QStringLiteral("end_sound")).toString());
     return result;
 }
 
