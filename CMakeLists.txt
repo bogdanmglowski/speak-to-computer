@@ -60,6 +60,8 @@ if(BUILD_TESTING)
         src/TranscriptCleaner.h
         src/WavWriter.cpp
         src/WavWriter.h
+        src/WhisperRunner.cpp
+        src/WhisperRunner.h
         tests/CoreBehaviorTest.cpp
     )
 
