@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 APP_ID="speak-to-computer"
 APP_NAME="Speak to Computer"
 BUILD_BINARY="${PROJECT_ROOT}/build-speak-to-computer/${APP_ID}"
-ICON_SOURCE="${PROJECT_ROOT}/assets/${APP_ID}.svg"Ok, jestem zbierany, testowałem się na to.Ok, i testowanie. O, i testowanie tego.
+ICON_SOURCE="${PROJECT_ROOT}/assets/${APP_ID}.svg"
 
 INSTALL_BIN_DIR="${HOME}/.local/bin"
 APPLICATIONS_DIR="${HOME}/.local/share/applications"
