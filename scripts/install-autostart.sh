@@ -8,6 +8,8 @@ APP_ID="speak-to-computer"
 APP_NAME="Speak to Computer"
 BUILD_BINARY="${PROJECT_ROOT}/build-speak-to-computer/${APP_ID}"
 ICON_SOURCE="${PROJECT_ROOT}/assets/${APP_ID}.svg"
+ACTIVATION_SOUND_SOURCE="${PROJECT_ROOT}/src/activation_sound.wav"
+END_SOUND_SOURCE="${PROJECT_ROOT}/src/end_sound.wav"
 
 INSTALL_BIN_DIR="${HOME}/.local/bin"
 APPLICATIONS_DIR="${HOME}/.local/share/applications"
@@ -15,6 +17,8 @@ AUTOSTART_DIR="${HOME}/.config/autostart"
 ICON_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
 
 INSTALLED_BINARY="${INSTALL_BIN_DIR}/${APP_ID}"
+INSTALLED_ACTIVATION_SOUND="${INSTALL_BIN_DIR}/activation_sound.wav"
+INSTALLED_END_SOUND="${INSTALL_BIN_DIR}/end_sound.wav"
 INSTALLED_ICON="${ICON_DIR}/${APP_ID}.svg"
 DESKTOP_FILE="${APPLICATIONS_DIR}/${APP_ID}.desktop"
 AUTOSTART_FILE="${AUTOSTART_DIR}/${APP_ID}.desktop"
@@ -50,6 +54,14 @@ if [[ ! -f "${ICON_SOURCE}" ]]; then
     echo "Missing icon asset: ${ICON_SOURCE}" >&2
     exit 1
 fi
+if [[ ! -f "${ACTIVATION_SOUND_SOURCE}" ]]; then
+    echo "Missing activation sound asset: ${ACTIVATION_SOUND_SOURCE}" >&2
+    exit 1
+fi
+if [[ ! -f "${END_SOUND_SOURCE}" ]]; then
+    echo "Missing end sound asset: ${END_SOUND_SOURCE}" >&2
+    exit 1
+fi
 
 echo "Building ${APP_ID}"
 "${PROJECT_ROOT}/scripts/clean-build.sh"
@@ -62,6 +74,12 @@ fi
 echo "Installing binary to ${INSTALLED_BINARY}"
 install -d -m 0755 "${INSTALL_BIN_DIR}"
 install -m 0755 "${BUILD_BINARY}" "${INSTALLED_BINARY}"
+
+echo "Installing activation sound to ${INSTALLED_ACTIVATION_SOUND}"
+install -m 0644 "${ACTIVATION_SOUND_SOURCE}" "${INSTALLED_ACTIVATION_SOUND}"
+
+echo "Installing end sound to ${INSTALLED_END_SOUND}"
+install -m 0644 "${END_SOUND_SOURCE}" "${INSTALLED_END_SOUND}"
 
 echo "Installing icon to ${INSTALLED_ICON}"
 install -d -m 0755 "${ICON_DIR}"
