@@ -22,6 +22,7 @@ private slots:
     void settingsShouldMigrateLegacyHotkeyToDictationHotkey();
     void settingsShouldIgnoreTranslateToEnglishAsSavedMode();
     void cleanupShouldTrimAndJoinTranscriptLines();
+    void cleanupShouldDropWhisperNonSpeechAnnotations();
     void whisperRunnerShouldPassTranslateFlagWhenEnabled();
     void whisperRunnerShouldOmitTranslateFlagWhenDisabled();
     void wavWriterShouldWritePcm16MonoHeader();
@@ -181,6 +182,17 @@ void CoreBehaviorTest::cleanupShouldTrimAndJoinTranscriptLines()
     const QString raw = QStringLiteral("  To jest test.  \n\n  Druga linia. \r\n");
 
     QCOMPARE(TranscriptCleaner::cleanup(raw), QStringLiteral("To jest test. Druga linia."));
+}
+
+void CoreBehaviorTest::cleanupShouldDropWhisperNonSpeechAnnotations()
+{
+    QCOMPARE(TranscriptCleaner::cleanup(QStringLiteral(" [Music]\n")), QString());
+    QCOMPARE(TranscriptCleaner::cleanup(QStringLiteral("Pierwsze zdanie.\n[Music]\nDrugie zdanie.")),
+            QStringLiteral("Pierwsze zdanie. Drugie zdanie."));
+    QCOMPARE(TranscriptCleaner::cleanup(QStringLiteral("Hello [Laughter] world [BLANK_AUDIO]")),
+            QStringLiteral("Hello world"));
+    QCOMPARE(TranscriptCleaner::cleanup(QStringLiteral("Use [value] literally.")),
+            QStringLiteral("Use [value] literally."));
 }
 
 void CoreBehaviorTest::whisperRunnerShouldPassTranslateFlagWhenEnabled()
