@@ -436,8 +436,8 @@ QString SpeakToComputerApp::hotkeyFor(OutputMode outputMode) const
 QStringList SpeakToComputerApp::recordingHints() const
 {
     return {
-            QStringLiteral("%1: finish as %2").arg(hotkeyFor(OutputMode::English), outputLabel(OutputMode::English)),
             QStringLiteral("%1: finish as %2").arg(hotkeyFor(OutputMode::Original), outputLabel(OutputMode::Original)),
+            QStringLiteral("%1: finish as %2").arg(hotkeyFor(OutputMode::English), outputLabel(OutputMode::English)),
     };
 }
 

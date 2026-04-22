@@ -16,8 +16,8 @@ class OverlayWidget : public QWidget {
 public:
     explicit OverlayWidget(QWidget *parent = nullptr);
 
-    void showRecording();
-    void showTranscribing();
+    void showRecording(const QString &outputLabel, const QStringList &hints);
+    void showTranscribing(const QString &outputLabel);
     void showDone(const QString &message);
     void showError(const QString &message);
     void setAudioLevel(double level);
@@ -54,6 +54,7 @@ private:
     Mode mode_ = Mode::Recording;
     QString title_;
     QString subtitle_;
+    QStringList secondarySubtitles_;
     QString modelLabel_ = QStringLiteral("Small");
     QStringList availableModelPaths_;
     QPlainTextEdit *errorText_ = nullptr;

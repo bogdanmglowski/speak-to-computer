@@ -21,14 +21,18 @@
 
 namespace {
 
-constexpr int defaultWidth = 380;
-constexpr int defaultHeight = 112;
+constexpr int defaultWidth = 440;
 constexpr int outerMargin = 8;
 constexpr int textLeft = 58;
 constexpr int rightMargin = 24;
 constexpr int titleTop = 19;
 constexpr int titleHeight = 24;
-constexpr int bodyTop = 48;
+constexpr int bodyTop = 56;
+constexpr int bodyTextPointSize = 12;
+constexpr int bodyTextHeight = 28;
+constexpr int bodyLineGap = 8;
+constexpr int textToBarGap = 16;
+constexpr int progressBarTopFromCardBottom = 24;
 constexpr int cardBottomMargin = 20;
 constexpr int modelChipTop = 13;
 constexpr int modelChipHeight = 28;
@@ -36,6 +40,13 @@ constexpr int modelChipRightPadding = 14;
 constexpr int modelChipHorizontalPadding = 11;
 constexpr int modelChipArrowWidth = 10;
 constexpr int modelChipGapToTitle = 12;
+
+int windowHeightForBodyLines(int lineCount)
+{
+    const int safeLineCount = std::max(1, lineCount);
+    const int textBlockHeight = safeLineCount * bodyTextHeight + (safeLineCount - 1) * bodyLineGap;
+    return outerMargin * 2 + bodyTop + textBlockHeight + textToBarGap + progressBarTopFromCardBottom;
+}
 
 } // namespace
 
@@ -68,14 +79,15 @@ OverlayWidget::OverlayWidget(QWidget *parent)
             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"));
     errorText_->hide();
 
-    setFixedSize(defaultWidth, defaultHeight);
+    setFixedSize(defaultWidth, windowHeightForBodyLines(1));
 }
 
-void OverlayWidget::showRecording()
+void OverlayWidget::showRecording(const QString &outputLabel, const QStringList &hints)
 {
     mode_ = Mode::Recording;
     title_ = QStringLiteral("Recording");
-    subtitle_ = QStringLiteral("Press the hotkey again to finish");
+    subtitle_ = QStringLiteral("Output: %1").arg(outputLabel);
+    secondarySubtitles_ = hints;
     audioLevel_ = 0.0;
     elapsedMs_ = 0;
     errorText_->hide();
@@ -86,11 +98,12 @@ void OverlayWidget::showRecording()
     update();
 }
 
-void OverlayWidget::showTranscribing()
+void OverlayWidget::showTranscribing(const QString &outputLabel)
 {
     mode_ = Mode::Transcribing;
     title_ = QStringLiteral("Transcribing");
-    subtitle_ = QStringLiteral("Whisper is processing the recording");
+    subtitle_ = QStringLiteral("Output: %1").arg(outputLabel);
+    secondarySubtitles_ = QStringList{QStringLiteral("Whisper is processing the recording")};
     audioLevel_ = 0.0;
     errorText_->hide();
     updateWindowSize();
@@ -105,6 +118,7 @@ void OverlayWidget::showDone(const QString &message)
     mode_ = Mode::Done;
     title_ = QStringLiteral("Inserted");
     subtitle_ = message;
+    secondarySubtitles_.clear();
     audioLevel_ = 1.0;
     errorText_->hide();
     updateWindowSize();
@@ -119,6 +133,7 @@ void OverlayWidget::showError(const QString &message)
     mode_ = Mode::Error;
     title_ = QStringLiteral("Dictation error");
     subtitle_ = message;
+    secondarySubtitles_.clear();
     audioLevel_ = 0.0;
     errorText_->setPlainText(message);
     updateWindowSize();
@@ -238,15 +253,32 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     }
 
     QFont bodyFont = font();
-    bodyFont.setPointSize(10);
+    bodyFont.setPointSize(bodyTextPointSize);
     painter.setFont(bodyFont);
     painter.setPen(QColor(194, 200, 210));
     QString body = subtitle_;
     const QFontMetrics metrics(bodyFont);
-    body = metrics.elidedText(body, Qt::ElideRight, static_cast<int>(card.width() - 82));
-    painter.drawText(QRectF(card.left() + textLeft, card.top() + bodyTop, card.width() - 82, 22), body);
+    const qreal bodyWidth = card.width() - textLeft - rightMargin;
+    body = metrics.elidedText(body, Qt::ElideRight, static_cast<int>(bodyWidth));
+    painter.drawText(QRectF(card.left() + textLeft, card.top() + bodyTop, bodyWidth, bodyTextHeight), body);
 
-    const QRectF bar(card.left() + textLeft, card.bottom() - 24, card.width() - 114, 7);
+    qreal secondaryTop = card.top() + bodyTop + bodyTextHeight + bodyLineGap;
+    for (const QString &secondarySubtitle : secondarySubtitles_) {
+        QString secondaryBody = secondarySubtitle;
+        secondaryBody = metrics.elidedText(secondaryBody, Qt::ElideRight, static_cast<int>(bodyWidth));
+        painter.setPen(QColor(150, 158, 170));
+        painter.drawText(QRectF(card.left() + textLeft,
+                                 secondaryTop,
+                                 bodyWidth,
+                                 bodyTextHeight),
+                secondaryBody);
+        secondaryTop += bodyTextHeight + bodyLineGap;
+    }
+
+    const QRectF bar(card.left() + textLeft,
+            card.bottom() - progressBarTopFromCardBottom,
+            card.width() - 114,
+            7);
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(255, 255, 255, 38));
     painter.drawRoundedRect(bar, 4, 4);
@@ -300,7 +332,7 @@ void OverlayWidget::updateWindowSize()
     if (mode_ == Mode::Error) {
         setFixedSize(errorWindowSize());
     } else {
-        setFixedSize(defaultWidth, defaultHeight);
+        setFixedSize(defaultWidth, windowHeightForBodyLines(1 + secondarySubtitles_.size()));
     }
     updateErrorTextGeometry();
 }
