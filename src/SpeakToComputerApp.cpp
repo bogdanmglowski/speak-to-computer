@@ -32,11 +32,6 @@ QIcon createApplicationIcon()
         QPainter painter(&pixmap);
         painter.setRenderHint(QPainter::Antialiasing, true);
 
-        const QRectF background(4.0 * unit, 4.0 * unit, 56.0 * unit, 56.0 * unit);
-        painter.setPen(QPen(QColor(255, 255, 255, 55), 2.0 * unit));
-        painter.setBrush(QColor(22, 24, 28));
-        painter.drawRoundedRect(background, 12.0 * unit, 12.0 * unit);
-
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(229, 70, 78));
         painter.drawEllipse(QPointF(32.0 * unit, 32.0 * unit), 20.0 * unit, 20.0 * unit);
