@@ -20,6 +20,7 @@ public:
     void showTranscribing(const QString &outputLabel);
     void showDone(const QString &message);
     void showError(const QString &message);
+    void showError(const QString &message, const QString &title);
     void setAudioLevel(double level);
     void setElapsedMs(qint64 elapsedMs);
     void setModelLabel(const QString &label);
@@ -60,5 +61,6 @@ private:
     QPlainTextEdit *errorText_ = nullptr;
     double audioLevel_ = 0.0;
     qint64 elapsedMs_ = 0;
+    int errorDisplayId_ = 0;
     bool modelControlEnabled_ = true;
 };

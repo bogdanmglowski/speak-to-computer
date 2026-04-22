@@ -14,6 +14,7 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QShowEvent>
+#include <QTimer>
 #include <QTextDocument>
 #include <QTextOption>
 
@@ -40,6 +41,7 @@ constexpr int modelChipRightPadding = 14;
 constexpr int modelChipHorizontalPadding = 11;
 constexpr int modelChipArrowWidth = 10;
 constexpr int modelChipGapToTitle = 12;
+constexpr int errorAutoHideMs = 15000;
 
 int windowHeightForBodyLines(int lineCount)
 {
@@ -130,8 +132,13 @@ void OverlayWidget::showDone(const QString &message)
 
 void OverlayWidget::showError(const QString &message)
 {
+    showError(message, QStringLiteral("Dictation error"));
+}
+
+void OverlayWidget::showError(const QString &message, const QString &title)
+{
     mode_ = Mode::Error;
-    title_ = QStringLiteral("Dictation error");
+    title_ = title;
     subtitle_ = message;
     secondarySubtitles_.clear();
     audioLevel_ = 0.0;
@@ -142,6 +149,13 @@ void OverlayWidget::showError(const QString &message)
     show();
     raise();
     update();
+
+    const int displayId = ++errorDisplayId_;
+    QTimer::singleShot(errorAutoHideMs, this, [this, displayId]() {
+        if (mode_ == Mode::Error && errorDisplayId_ == displayId) {
+            hide();
+        }
+    });
 }
 
 void OverlayWidget::setAudioLevel(double level)
