@@ -5,7 +5,8 @@
 
 struct AppSettings {
     QString settingsPath;
-    QString hotkey;
+    QString hotkeyDictate;
+    QString hotkeyTranslateEn;
     QString audioBackend;
     QString language;
     QString whisperCli;

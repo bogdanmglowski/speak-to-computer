@@ -196,6 +196,11 @@ bool X11Hotkey::registerHotkey(const QString &hotkey, QString *errorMessage)
     return true;
 }
 
+void X11Hotkey::unregisterHotkey()
+{
+    ungrab();
+}
+
 quint64 X11Hotkey::activeWindow() const
 {
     if (display_ == nullptr) {

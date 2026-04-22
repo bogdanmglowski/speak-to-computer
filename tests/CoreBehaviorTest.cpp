@@ -18,8 +18,9 @@ private slots:
     void settingsShouldResolveModelLabel();
     void settingsShouldReturnOnlyExistingModelPaths();
     void settingsShouldSaveModelPath();
-    void settingsShouldLoadTranslateToEnglishDefaultFalse();
-    void settingsShouldLoadTranslateToEnglishExplicitTrue();
+    void settingsShouldLoadSeparateHotkeyDefaults();
+    void settingsShouldMigrateLegacyHotkeyToDictationHotkey();
+    void settingsShouldIgnoreTranslateToEnglishAsSavedMode();
     void cleanupShouldTrimAndJoinTranscriptLines();
     void whisperRunnerShouldPassTranslateFlagWhenEnabled();
     void whisperRunnerShouldOmitTranslateFlagWhenDisabled();
@@ -123,7 +124,7 @@ void CoreBehaviorTest::settingsShouldSaveModelPath()
     QCOMPARE(settings.value(QStringLiteral("model")).toString(), QStringLiteral("/tmp/ggml-medium.bin"));
 }
 
-void CoreBehaviorTest::settingsShouldLoadTranslateToEnglishDefaultFalse()
+void CoreBehaviorTest::settingsShouldLoadSeparateHotkeyDefaults()
 {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -131,18 +132,36 @@ void CoreBehaviorTest::settingsShouldLoadTranslateToEnglishDefaultFalse()
     const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
     const AppSettings settings = AppSettings::loadFromPath(settingsPath);
 
+    QCOMPARE(settings.hotkeyDictate, QStringLiteral("Super+Space"));
+    QCOMPARE(settings.hotkeyTranslateEn, QStringLiteral("Super+Shift+Space"));
     QCOMPARE(settings.translateToEn, false);
 
     QSettings storedSettings(settingsPath, QSettings::IniFormat);
-    QVERIFY(storedSettings.contains(QStringLiteral("translate-to-en")));
-    QCOMPARE(storedSettings.value(QStringLiteral("translate-to-en")).toBool(), false);
-
-    storedSettings.setValue(QStringLiteral("translate-to-en"), QStringLiteral("false"));
-    storedSettings.sync();
-    QCOMPARE(AppSettings::loadFromPath(settingsPath).translateToEn, false);
+    QCOMPARE(storedSettings.value(QStringLiteral("hotkey_dictate")).toString(), QStringLiteral("Super+Space"));
+    QCOMPARE(storedSettings.value(QStringLiteral("hotkey_translate_en")).toString(),
+            QStringLiteral("Super+Shift+Space"));
+    QVERIFY(!storedSettings.contains(QStringLiteral("translate-to-en")));
 }
 
-void CoreBehaviorTest::settingsShouldLoadTranslateToEnglishExplicitTrue()
+void CoreBehaviorTest::settingsShouldMigrateLegacyHotkeyToDictationHotkey()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("hotkey"), QStringLiteral("Alt+Space"));
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QCOMPARE(settings.hotkeyDictate, QStringLiteral("Alt+Space"));
+    QCOMPARE(settings.hotkeyTranslateEn, QStringLiteral("Super+Shift+Space"));
+    QSettings reloadedSettings(settingsPath, QSettings::IniFormat);
+    QCOMPARE(reloadedSettings.value(QStringLiteral("hotkey_dictate")).toString(), QStringLiteral("Alt+Space"));
+}
+
+void CoreBehaviorTest::settingsShouldIgnoreTranslateToEnglishAsSavedMode()
 {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -154,7 +173,7 @@ void CoreBehaviorTest::settingsShouldLoadTranslateToEnglishExplicitTrue()
 
     const AppSettings settings = AppSettings::loadFromPath(settingsPath);
 
-    QCOMPARE(settings.translateToEn, true);
+    QCOMPARE(settings.translateToEn, false);
 }
 
 void CoreBehaviorTest::cleanupShouldTrimAndJoinTranscriptLines()

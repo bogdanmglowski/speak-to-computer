@@ -47,8 +47,13 @@ QString modelDirectoryPathFor(const QString &currentModelPath)
 
 void ensureDefaults(QSettings *settings)
 {
-    if (!settings->contains(QStringLiteral("hotkey"))) {
-        settings->setValue(QStringLiteral("hotkey"), QStringLiteral("Super+Space"));
+    if (!settings->contains(QStringLiteral("hotkey_dictate"))) {
+        const QString legacyHotkey = settings->value(QStringLiteral("hotkey")).toString().trimmed();
+        settings->setValue(QStringLiteral("hotkey_dictate"),
+                legacyHotkey.isEmpty() ? QStringLiteral("Super+Space") : legacyHotkey);
+    }
+    if (!settings->contains(QStringLiteral("hotkey_translate_en"))) {
+        settings->setValue(QStringLiteral("hotkey_translate_en"), QStringLiteral("Super+Shift+Space"));
     }
     if (!settings->contains(QStringLiteral("language"))) {
         settings->setValue(QStringLiteral("language"), QStringLiteral("pl"));
@@ -149,11 +154,11 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
 
     AppSettings result;
     result.settingsPath = settingsPath;
-    result.hotkey = settings.value(QStringLiteral("hotkey")).toString();
+    result.hotkeyDictate = settings.value(QStringLiteral("hotkey_dictate")).toString();
+    result.hotkeyTranslateEn = settings.value(QStringLiteral("hotkey_translate_en")).toString();
     result.audioBackend = settings.value(QStringLiteral("audio_backend")).toString();
     result.language = settings.value(QStringLiteral("language")).toString();
     result.threads = settings.value(QStringLiteral("threads")).toInt();
-    result.translateToEn = readBooleanSetting(settings, QStringLiteral("translate-to-en"));
     result.whisperCli = expandUserPath(settings.value(QStringLiteral("whisper_cli")).toString());
     result.model = expandUserPath(settings.value(QStringLiteral("model")).toString());
     result.activationSound = expandUserPath(settings.value(QStringLiteral("activation_sound")).toString());
