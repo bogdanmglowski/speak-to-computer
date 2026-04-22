@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QProcess>
+#include <QLocale>
 #include <QStandardPaths>
 #include <QSystemTrayIcon>
 
@@ -30,11 +31,6 @@ QIcon createApplicationIcon()
 
         QPainter painter(&pixmap);
         painter.setRenderHint(QPainter::Antialiasing, true);
-
-        const QRectF background(4.0 * unit, 4.0 * unit, 56.0 * unit, 56.0 * unit);
-        painter.setPen(QPen(QColor(255, 255, 255, 55), 2.0 * unit));
-        painter.setBrush(QColor(22, 24, 28));
-        painter.drawRoundedRect(background, 12.0 * unit, 12.0 * unit);
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(229, 70, 78));
@@ -58,13 +54,35 @@ QIcon createApplicationIcon()
     return icon;
 }
 
+QString languageDisplayName(const QString &language)
+{
+    const QString languageTag = language.trimmed();
+    if (languageTag.isEmpty()) {
+        return QStringLiteral("unknown");
+    }
+    if (languageTag.compare(QStringLiteral("auto"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("auto-detected");
+    }
+
+    const QLocale locale(languageTag);
+    if (locale.language() == QLocale::C) {
+        return languageTag;
+    }
+    return QLocale::languageToString(locale.language());
+}
+
 } // namespace
 
 SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *parent)
     : QObject(parent)
     , settings_(settings)
 {
-    connect(&hotkey_, &X11Hotkey::activated, this, &SpeakToComputerApp::toggleDictation);
+    connect(&dictateHotkey_, &X11Hotkey::activated, this, [this]() {
+        handleHotkey(OutputMode::Original, dictateHotkey_);
+    });
+    connect(&translateHotkey_, &X11Hotkey::activated, this, [this]() {
+        handleHotkey(OutputMode::English, translateHotkey_);
+    });
     connect(&recorder_, &AudioRecorder::levelChanged, &overlay_, &OverlayWidget::setAudioLevel);
     connect(&recorder_, &AudioRecorder::failed, this, &SpeakToComputerApp::handleRecordingFailed);
     connect(&whisper_, &WhisperRunner::transcriptionReady, this, &SpeakToComputerApp::handleTranscriptionReady);
@@ -85,21 +103,36 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
 bool SpeakToComputerApp::start()
 {
     QString errorMessage;
-    if (!hotkey_.registerHotkey(settings_.hotkey, &errorMessage)) {
-        qWarning().noquote() << errorMessage;
-        overlay_.showError(errorMessage);
-        trayStatusOverride_ = QStringLiteral("Error: %1").arg(errorMessage);
+    if (!dictateHotkey_.registerHotkey(settings_.hotkeyDictate, &errorMessage)) {
+        const QString fullMessage =
+                QStringLiteral("Could not register dictation hotkey %1: %2")
+                        .arg(settings_.hotkeyDictate, errorMessage);
+        qWarning().noquote() << fullMessage;
+        overlay_.showError(fullMessage);
+        trayStatusOverride_ = QStringLiteral("Error: %1").arg(fullMessage);
         updateTrayStatus();
         return false;
     }
-    qInfo().noquote() << "speak-to-computer listening for" << settings_.hotkey;
+    if (!translateHotkey_.registerHotkey(settings_.hotkeyTranslateEn, &errorMessage)) {
+        dictateHotkey_.unregisterHotkey();
+        const QString fullMessage =
+                QStringLiteral("Could not register English hotkey %1: %2")
+                        .arg(settings_.hotkeyTranslateEn, errorMessage);
+        qWarning().noquote() << fullMessage;
+        overlay_.showError(fullMessage);
+        trayStatusOverride_ = QStringLiteral("Error: %1").arg(fullMessage);
+        updateTrayStatus();
+        return false;
+    }
+    qInfo().noquote() << "speak-to-computer listening for dictation hotkey" << settings_.hotkeyDictate
+                      << "and English hotkey" << settings_.hotkeyTranslateEn;
     qInfo().noquote() << "settings:" << settings_.settingsPath;
     trayStatusOverride_.clear();
     updateTrayStatus();
     return true;
 }
 
-void SpeakToComputerApp::toggleDictation()
+void SpeakToComputerApp::handleHotkey(OutputMode outputMode, const X11Hotkey &sourceHotkey)
 {
     if (hotkeyDebounce_.isValid() && hotkeyDebounce_.elapsed() < 500) {
         return;
@@ -107,13 +140,13 @@ void SpeakToComputerApp::toggleDictation()
     hotkeyDebounce_.restart();
 
     if (state_ == State::Idle) {
-        startRecording();
+        startRecording(outputMode, sourceHotkey);
     } else if (state_ == State::Recording) {
-        stopRecording();
+        stopRecording(outputMode);
     }
 }
 
-void SpeakToComputerApp::startRecording()
+void SpeakToComputerApp::startRecording(OutputMode outputMode, const X11Hotkey &sourceHotkey)
 {
     trayStatusOverride_.clear();
     overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
@@ -124,7 +157,8 @@ void SpeakToComputerApp::startRecording()
         return;
     }
 
-    targetWindow_ = hotkey_.activeWindow();
+    currentOutputMode_ = outputMode;
+    targetWindow_ = sourceHotkey.activeWindow();
     if (!recorder_.start(settings_.audioBackend, &errorMessage)) {
         showErrorAndReturnIdle(errorMessage);
         return;
@@ -135,13 +169,15 @@ void SpeakToComputerApp::startRecording()
     elapsedTimer_.start();
     overlay_.setModelControlEnabled(true);
     playActivationSound();
-    overlay_.showRecording();
+    overlay_.showRecording(outputLabel(currentOutputMode_), recordingHints());
     updateTrayStatus();
-    qInfo().noquote() << "recording started using audio backend" << recorder_.activeBackendName();
+    qInfo().noquote() << "recording started using audio backend" << recorder_.activeBackendName()
+                      << "output" << outputLabel(currentOutputMode_);
 }
 
-void SpeakToComputerApp::stopRecording()
+void SpeakToComputerApp::stopRecording(OutputMode outputMode)
 {
+    currentOutputMode_ = outputMode;
     trayStatusOverride_.clear();
     elapsedTimer_.stop();
     playEndSound();
@@ -165,10 +201,13 @@ void SpeakToComputerApp::stopRecording()
 
     state_ = State::Transcribing;
     overlay_.setModelControlEnabled(false);
-    overlay_.showTranscribing();
+    overlay_.showTranscribing(outputLabel(currentOutputMode_));
     updateTrayStatus();
-    qInfo() << "recording stopped, transcribing";
-    whisper_.transcribe(currentWavPath_, settings_);
+    qInfo().noquote() << "recording stopped, transcribing output" << outputLabel(currentOutputMode_);
+
+    AppSettings transcriptionSettings = settings_;
+    transcriptionSettings.translateToEn = currentOutputMode_ == OutputMode::English;
+    whisper_.transcribe(currentWavPath_, transcriptionSettings);
 }
 
 void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
@@ -176,7 +215,7 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
     removeCurrentWav();
 
     if (text.isEmpty()) {
-        showErrorAndReturnIdle(QStringLiteral("Whisper did not return any text."));
+        showAlertAndReturnIdle(QStringLiteral("Whisper did not return any text."));
         return;
     }
 
@@ -189,7 +228,7 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
     state_ = State::Idle;
     trayStatusOverride_.clear();
     overlay_.setModelControlEnabled(true);
-    overlay_.showDone(QStringLiteral("Text pasted into the active window"));
+    overlay_.showDone(QStringLiteral("%1 text pasted into the active window").arg(outputLabel(currentOutputMode_)));
     updateTrayStatus();
     qInfo() << "transcription pasted";
     QTimer::singleShot(900, &overlay_, &OverlayWidget::hide);
@@ -361,10 +400,40 @@ bool SpeakToComputerApp::maybeOfferModelFallback(const QString &message)
     state_ = State::Idle;
     trayStatusOverride_.clear();
     overlay_.setModelControlEnabled(true);
-    overlay_.showDone(QStringLiteral("Switched to %1. Press hotkey to retry.").arg(fallbackLabel));
+    overlay_.showDone(QStringLiteral("Switched to %1. Press %2 to retry.")
+                              .arg(fallbackLabel, hotkeyFor(currentOutputMode_)));
     updateTrayStatus();
     QTimer::singleShot(1400, &overlay_, &OverlayWidget::hide);
     return true;
+}
+
+QString SpeakToComputerApp::outputLabel(OutputMode outputMode) const
+{
+    if (outputMode == OutputMode::English) {
+        return QStringLiteral("English");
+    }
+    return QStringLiteral("Original (%1)").arg(originalLanguageLabel());
+}
+
+QString SpeakToComputerApp::originalLanguageLabel() const
+{
+    return languageDisplayName(settings_.language);
+}
+
+QString SpeakToComputerApp::hotkeyFor(OutputMode outputMode) const
+{
+    if (outputMode == OutputMode::English) {
+        return settings_.hotkeyTranslateEn;
+    }
+    return settings_.hotkeyDictate;
+}
+
+QStringList SpeakToComputerApp::recordingHints() const
+{
+    return {
+            QStringLiteral("%1: finish as %2").arg(hotkeyFor(OutputMode::Original), outputLabel(OutputMode::Original)),
+            QStringLiteral("%1: finish as %2").arg(hotkeyFor(OutputMode::English), outputLabel(OutputMode::English)),
+    };
 }
 
 QString SpeakToComputerApp::nextWavPath() const
@@ -383,12 +452,14 @@ QString SpeakToComputerApp::trayStatusText() const
     }
 
     if (state_ == State::Recording) {
-        return QStringLiteral("Recording. Press %1 to finish.").arg(settings_.hotkey);
+        return QStringLiteral("Recording %1. Press %2 to finish.")
+                .arg(outputLabel(currentOutputMode_), hotkeyFor(currentOutputMode_));
     }
     if (state_ == State::Transcribing) {
-        return QStringLiteral("Transcribing.");
+        return QStringLiteral("Transcribing %1.").arg(outputLabel(currentOutputMode_));
     }
-    return QStringLiteral("Ready. Press %1 to dictate.").arg(settings_.hotkey);
+    return QStringLiteral("Ready. %1 dictates, %2 translates to English.")
+            .arg(settings_.hotkeyDictate, settings_.hotkeyTranslateEn);
 }
 
 void SpeakToComputerApp::setupTrayIcon()
@@ -420,6 +491,15 @@ void SpeakToComputerApp::updateTrayStatus()
         trayStatusAction_->setText(status);
     }
     trayIcon_.setToolTip(QStringLiteral("Speak to Computer\n%1").arg(status));
+}
+
+void SpeakToComputerApp::showAlertAndReturnIdle(const QString &message)
+{
+    state_ = State::Idle;
+    trayStatusOverride_ = QStringLiteral("Alert: %1").arg(message);
+    overlay_.setModelControlEnabled(true);
+    overlay_.showError(message, QStringLiteral("Dictation alert"));
+    updateTrayStatus();
 }
 
 void SpeakToComputerApp::showErrorAndReturnIdle(const QString &message)

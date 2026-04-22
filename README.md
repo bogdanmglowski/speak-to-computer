@@ -19,7 +19,6 @@ This is not a production-ready project, but it turned out to be somewhat useful,
 Things I’d like to experiment with next:
 - make the sys tray icon transparent
 - add TLDR fast install instructions to the README
-- add additional shortcuts for translation mode
 - better logging + basic transcription history
 
 
@@ -211,9 +210,12 @@ cd $APP_LOCATION/speak-to-computer
 QT_LOGGING_RULES='*.info=true' ./build-speak-to-computer/speak-to-computer
 ```
 
-Press `Super+Space` to start recording. Press the same hotkey again to stop
-recording, transcribe, and paste the text into the window that was active when
-recording started.
+Press `Super+Space` to start recording original-language dictation, or
+`Super+Shift+Space` to start recording text that should be translated to
+English. Press the same hotkey again to stop recording, transcribe, and paste
+the text into the window that was active when recording started. While
+recording, pressing the other hotkey stops the recording and uses that output
+instead.
 
 The app runs in the background and exposes a system tray icon. Right-click the
 tray icon and choose `Quit` to stop it.
@@ -261,20 +263,23 @@ The first run writes defaults to:
 Supported settings:
 
 ```ini
-hotkey=Super+Space
+hotkey_dictate=Super+Space
+hotkey_translate_en=Super+Shift+Space
 audio_backend=auto
 language=pl
-translate-to-en=false
 threads=12
 whisper_cli=~/whisper.cpp/build/bin/whisper-cli
 model=~/whisper.cpp/models/ggml-small.bin
+activation_sound=activation_sound.wav
+end_sound=end_sound.wav
 ```
 
 Set `language=auto` to let Whisper detect the spoken language. Use `language=en`
 for English-only dictation.
 
-Set `translate-to-en=true` to translate the spoken language to English before
-pasting.
+Use `hotkey_dictate` for original-language dictation and
+`hotkey_translate_en` for translation to English. The output mode is chosen by
+the hotkey used for the current recording, not stored as a persistent setting.
 
 `audio_backend=auto` picks the first available recorder in this order:
 `pw-record`, `parec`, `parecord`, then `arecord`. You can force a backend with

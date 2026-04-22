@@ -13,6 +13,7 @@ public:
     ~X11Hotkey() override;
 
     bool registerHotkey(const QString &hotkey, QString *errorMessage);
+    void unregisterHotkey();
     quint64 activeWindow() const;
 
 signals:

@@ -10,6 +10,7 @@
 #include <QElapsedTimer>
 #include <QMenu>
 #include <QObject>
+#include <QStringList>
 #include <QSystemTrayIcon>
 #include <QTimer>
 
@@ -24,9 +25,6 @@ public:
     bool start();
 
 private slots:
-    void toggleDictation();
-    void startRecording();
-    void stopRecording();
     void handleTranscriptionReady(const QString &text);
     void handleTranscriptionFailed(const QString &message);
     void handleRecordingFailed(const QString &message);
@@ -40,21 +38,35 @@ private:
         Transcribing,
     };
 
+    enum class OutputMode {
+        Original,
+        English,
+    };
+
+    void handleHotkey(OutputMode outputMode, const X11Hotkey &sourceHotkey);
+    void startRecording(OutputMode outputMode, const X11Hotkey &sourceHotkey);
+    void stopRecording(OutputMode outputMode);
     bool validateRuntime(QString *errorMessage) const;
     QString fallbackModelPathForInitializationFailure() const;
     bool applyModelSelection(const QString &selectedModelPath, QString *errorMessage);
     bool maybeOfferModelFallback(const QString &message);
+    QString outputLabel(OutputMode outputMode) const;
+    QString originalLanguageLabel() const;
+    QString hotkeyFor(OutputMode outputMode) const;
+    QStringList recordingHints() const;
     QString nextWavPath() const;
     QString trayStatusText() const;
     void setupTrayIcon();
     void updateTrayStatus();
+    void showAlertAndReturnIdle(const QString &message);
     void showErrorAndReturnIdle(const QString &message);
     void removeCurrentWav();
     void playActivationSound();
     void playEndSound();
 
     AppSettings settings_;
-    X11Hotkey hotkey_;
+    X11Hotkey dictateHotkey_;
+    X11Hotkey translateHotkey_;
     OverlayWidget overlay_;
     AudioRecorder recorder_;
     WhisperRunner whisper_;
@@ -67,6 +79,7 @@ private:
     QAction *trayStatusAction_ = nullptr;
     QAction *trayQuitAction_ = nullptr;
     State state_ = State::Idle;
+    OutputMode currentOutputMode_ = OutputMode::Original;
     quint64 targetWindow_ = 0;
     QString currentWavPath_;
     QString trayStatusOverride_;
