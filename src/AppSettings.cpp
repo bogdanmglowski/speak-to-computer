@@ -45,15 +45,6 @@ QString modelDirectoryPathFor(const QString &currentModelPath)
     return modelDirectory;
 }
 
-bool readBooleanSetting(const QSettings &settings, const QString &key)
-{
-    const QString normalized = settings.value(key).toString().trimmed().toLower();
-    return normalized == QStringLiteral("true")
-            || normalized == QStringLiteral("1")
-            || normalized == QStringLiteral("yes")
-            || normalized == QStringLiteral("on");
-}
-
 void ensureDefaults(QSettings *settings)
 {
     if (!settings->contains(QStringLiteral("hotkey"))) {
@@ -61,9 +52,6 @@ void ensureDefaults(QSettings *settings)
     }
     if (!settings->contains(QStringLiteral("language"))) {
         settings->setValue(QStringLiteral("language"), QStringLiteral("pl"));
-    }
-    if (!settings->contains(QStringLiteral("translate-to-en"))) {
-        settings->setValue(QStringLiteral("translate-to-en"), false);
     }
     if (!settings->contains(QStringLiteral("audio_backend"))) {
         settings->setValue(QStringLiteral("audio_backend"), QStringLiteral("auto"));
