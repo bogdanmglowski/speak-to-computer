@@ -215,7 +215,7 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
     removeCurrentWav();
 
     if (text.isEmpty()) {
-        showErrorAndReturnIdle(QStringLiteral("Whisper did not return any text."));
+        showAlertAndReturnIdle(QStringLiteral("Whisper did not return any text."));
         return;
     }
 
@@ -491,6 +491,15 @@ void SpeakToComputerApp::updateTrayStatus()
         trayStatusAction_->setText(status);
     }
     trayIcon_.setToolTip(QStringLiteral("Speak to Computer\n%1").arg(status));
+}
+
+void SpeakToComputerApp::showAlertAndReturnIdle(const QString &message)
+{
+    state_ = State::Idle;
+    trayStatusOverride_ = QStringLiteral("Alert: %1").arg(message);
+    overlay_.setModelControlEnabled(true);
+    overlay_.showError(message, QStringLiteral("Dictation alert"));
+    updateTrayStatus();
 }
 
 void SpeakToComputerApp::showErrorAndReturnIdle(const QString &message)

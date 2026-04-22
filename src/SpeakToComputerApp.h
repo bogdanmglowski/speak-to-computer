@@ -58,6 +58,7 @@ private:
     QString trayStatusText() const;
     void setupTrayIcon();
     void updateTrayStatus();
+    void showAlertAndReturnIdle(const QString &message);
     void showErrorAndReturnIdle(const QString &message);
     void removeCurrentWav();
     void playActivationSound();
