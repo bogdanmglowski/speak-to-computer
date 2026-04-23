@@ -8,3 +8,5 @@ core
 .vscode
 .codex
 docs
+__pycache__/
+*.pyc
