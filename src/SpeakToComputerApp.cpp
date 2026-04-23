@@ -112,6 +112,7 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&wakeWordListener_, &WakeWordListener::detected, this, &SpeakToComputerApp::handleWakeWordDetected);
     connect(&wakeWordListener_, &WakeWordListener::failed, this, &SpeakToComputerApp::handleWakeWordFailure);
     connect(&overlay_, &OverlayWidget::modelSelected, this, &SpeakToComputerApp::handleModelSelected);
+    connect(&overlay_, &OverlayWidget::vadPresetSelected, this, &SpeakToComputerApp::handleVadPresetSelected);
     connect(&elapsedTimer_, &QTimer::timeout, this, [this]() {
         overlay_.setElapsedMs(recordingClock_.elapsed());
     });
@@ -120,6 +121,8 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
     overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
     overlay_.setModelControlEnabled(true);
+    refreshVadRuntimeStatus();
+    updateOverlayVadControl();
 
     setupTrayIcon();
 }
@@ -196,24 +199,9 @@ void SpeakToComputerApp::startRecording(OutputMode outputMode, quint64 targetWin
         return;
     }
 
-    if (settings_.vadAutostopEnabled) {
-        refreshVadRuntimeStatus();
-        if (!vadRuntimeAvailable_) {
-            qWarning().noquote() << "VAD auto-stop unavailable:" << vadRuntimeError_;
-        } else {
-            const VadEndpointConfig vadConfig{
-                    settings_.vadAggressiveness,
-                    settings_.vadEndSilenceMs,
-                    settings_.vadMinSpeechMs,
-            };
-            QString vadErrorMessage;
-            if (vadEndpointDetector_.reset(vadConfig, &vadErrorMessage)) {
-                vadEnabledForCurrentRecording_ = true;
-            } else {
-                qWarning().noquote() << "VAD auto-stop disabled:" << vadErrorMessage;
-            }
-        }
-    }
+    refreshVadRuntimeStatus();
+    updateOverlayVadControl();
+    configureVadForCurrentRecording();
 
     state_ = State::Recording;
     recordingClock_.restart();
@@ -381,6 +369,38 @@ void SpeakToComputerApp::handleVadAutostopToggled(bool enabled)
     }
     settings_.vadAutostopEnabled = enabled;
     refreshVadRuntimeStatus();
+    updateOverlayVadControl();
+    if (state_ == State::Recording) {
+        configureVadForCurrentRecording();
+    }
+    updateTrayStatus();
+}
+
+void SpeakToComputerApp::handleVadPresetSelected(bool enabled, int endSilenceMs)
+{
+    if (enabled && endSilenceMs <= 0) {
+        qWarning() << "Ignoring invalid VAD auto-stop preset:" << endSilenceMs;
+        return;
+    }
+
+    if (enabled) {
+        QString saveSilenceError;
+        if (!AppSettings::saveVadEndSilenceMs(settings_.settingsPath, endSilenceMs, &saveSilenceError)) {
+            qWarning().noquote() << saveSilenceError;
+        }
+        settings_.vadEndSilenceMs = endSilenceMs;
+    }
+
+    QString saveToggleError;
+    if (!AppSettings::saveVadAutostopEnabled(settings_.settingsPath, enabled, &saveToggleError)) {
+        qWarning().noquote() << saveToggleError;
+    }
+    settings_.vadAutostopEnabled = enabled;
+    refreshVadRuntimeStatus();
+    updateOverlayVadControl();
+    if (state_ == State::Recording) {
+        configureVadForCurrentRecording();
+    }
     updateTrayStatus();
 }
 
@@ -444,15 +464,41 @@ void SpeakToComputerApp::disableWakeWordWithError(const QString &message)
 
 void SpeakToComputerApp::refreshVadRuntimeStatus()
 {
-    if (!settings_.vadAutostopEnabled) {
-        vadRuntimeAvailable_ = true;
-        vadRuntimeError_.clear();
-        return;
-    }
-
     QString runtimeError;
     vadRuntimeAvailable_ = WebRtcVad::isRuntimeAvailable(&runtimeError);
     vadRuntimeError_ = runtimeError;
+}
+
+void SpeakToComputerApp::updateOverlayVadControl()
+{
+    overlay_.setVadAutostopPreset(settings_.vadAutostopEnabled, settings_.vadEndSilenceMs);
+    overlay_.setVadControlAvailable(vadRuntimeAvailable_);
+}
+
+void SpeakToComputerApp::configureVadForCurrentRecording()
+{
+    vadEnabledForCurrentRecording_ = false;
+    vadEndpointDetector_.clear();
+    if (!settings_.vadAutostopEnabled) {
+        return;
+    }
+    if (!vadRuntimeAvailable_) {
+        qWarning().noquote() << "VAD auto-stop unavailable:" << vadRuntimeError_;
+        return;
+    }
+
+    const VadEndpointConfig vadConfig{
+            settings_.vadAggressiveness,
+            settings_.vadEndSilenceMs,
+            settings_.vadMinSpeechMs,
+    };
+    QString vadErrorMessage;
+    if (vadEndpointDetector_.reset(vadConfig, &vadErrorMessage)) {
+        vadEnabledForCurrentRecording_ = true;
+        return;
+    }
+
+    qWarning().noquote() << "VAD auto-stop disabled:" << vadErrorMessage;
 }
 
 bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const

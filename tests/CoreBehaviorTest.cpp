@@ -31,6 +31,8 @@ private slots:
     void settingsShouldLoadVadDefaults();
     void settingsShouldLoadVadOverrides();
     void settingsShouldSaveVadAutostopEnabled();
+    void settingsShouldSaveAndReloadVadEndSilenceMs();
+    void settingsShouldFallbackToDefaultVadEndSilenceMsWhenInvalid();
     void settingsShouldMigrateLegacyConfigWithoutVadKeys();
     void settingsShouldMigrateLegacyWakeWordRuntimeDefaults();
     void settingsShouldMigrateAppDataWakeWordRuntimeDefaults();
@@ -325,6 +327,36 @@ void CoreBehaviorTest::settingsShouldSaveVadAutostopEnabled()
 
     QSettings settings(settingsPath, QSettings::IniFormat);
     QCOMPARE(settings.value(QStringLiteral("vad_autostop_enabled")).toBool(), true);
+}
+
+void CoreBehaviorTest::settingsShouldSaveAndReloadVadEndSilenceMs()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QString errorMessage;
+    QVERIFY2(AppSettings::saveVadEndSilenceMs(settingsPath, 500, &errorMessage), qPrintable(errorMessage));
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+    QCOMPARE(settings.vadEndSilenceMs, 500);
+
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    QCOMPARE(storedSettings.value(QStringLiteral("vad_end_silence_ms")).toInt(), 500);
+}
+
+void CoreBehaviorTest::settingsShouldFallbackToDefaultVadEndSilenceMsWhenInvalid()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("vad_end_silence_ms"), 0);
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+    QCOMPARE(settings.vadEndSilenceMs, 900);
 }
 
 void CoreBehaviorTest::settingsShouldMigrateLegacyConfigWithoutVadKeys()

@@ -35,6 +35,7 @@ private slots:
     void handleWakeWordFailure(const QString &message);
     void handleWakeWordToggled(bool enabled);
     void handleVadAutostopToggled(bool enabled);
+    void handleVadPresetSelected(bool enabled, int endSilenceMs);
     void quitApplication();
 
 private:
@@ -69,6 +70,8 @@ private:
     QString trayStatusText() const;
     void setupTrayIcon();
     void updateTrayStatus();
+    void updateOverlayVadControl();
+    void configureVadForCurrentRecording();
     void showAlertAndReturnIdle(const QString &message);
     void showErrorAndReturnIdle(const QString &message);
     void removeCurrentWav();

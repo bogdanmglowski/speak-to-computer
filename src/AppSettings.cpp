@@ -259,6 +259,29 @@ bool AppSettings::saveVadAutostopEnabled(const QString &settingsPath, bool enabl
     return false;
 }
 
+bool AppSettings::saveVadEndSilenceMs(const QString &settingsPath, int endSilenceMs, QString *errorMessage)
+{
+    if (endSilenceMs <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("VAD auto-stop silence must be positive.");
+        }
+        return false;
+    }
+
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("vad_end_silence_ms"), endSilenceMs);
+    settings.sync();
+
+    if (settings.status() == QSettings::NoError) {
+        return true;
+    }
+
+    if (errorMessage != nullptr) {
+        *errorMessage = QStringLiteral("Failed to save VAD silence duration: %1").arg(settingsPath);
+    }
+    return false;
+}
+
 AppSettings AppSettings::loadFromPath(const QString &settingsPath)
 {
     QDir().mkpath(QFileInfo(settingsPath).absolutePath());

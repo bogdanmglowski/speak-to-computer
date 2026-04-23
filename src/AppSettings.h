@@ -32,6 +32,7 @@ struct AppSettings {
     static bool saveModel(const QString &settingsPath, const QString &modelPath, QString *errorMessage);
     static bool saveWakeWordEnabled(const QString &settingsPath, bool enabled, QString *errorMessage);
     static bool saveVadAutostopEnabled(const QString &settingsPath, bool enabled, QString *errorMessage);
+    static bool saveVadEndSilenceMs(const QString &settingsPath, int endSilenceMs, QString *errorMessage);
     static AppSettings loadFromPath(const QString &settingsPath);
     static AppSettings load();
 };
