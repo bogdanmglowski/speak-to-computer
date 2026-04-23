@@ -1,0 +1,2 @@
+openwakeword==0.6.0
+numpy<2

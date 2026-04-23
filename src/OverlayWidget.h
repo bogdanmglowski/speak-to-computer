@@ -17,6 +17,7 @@ public:
     explicit OverlayWidget(QWidget *parent = nullptr);
 
     void showRecording(const QString &outputLabel, const QStringList &hints);
+    void showListening(const QString &wakeWordPhrase);
     void showTranscribing(const QString &outputLabel);
     void showDone(const QString &message);
     void showError(const QString &message);
@@ -38,6 +39,7 @@ protected:
 
 private:
     enum class Mode {
+        Listening,
         Recording,
         Transcribing,
         Done,

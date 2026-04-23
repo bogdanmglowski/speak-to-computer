@@ -100,6 +100,22 @@ void OverlayWidget::showRecording(const QString &outputLabel, const QStringList 
     update();
 }
 
+void OverlayWidget::showListening(const QString &wakeWordPhrase)
+{
+    mode_ = Mode::Listening;
+    title_ = QStringLiteral("Listening");
+    subtitle_ = QStringLiteral("Wake word: %1").arg(wakeWordPhrase);
+    secondarySubtitles_ = QStringList{QStringLiteral("Say the wake word to start recording")};
+    audioLevel_ = 0.0;
+    elapsedMs_ = 0;
+    errorText_->hide();
+    updateWindowSize();
+    placeOnPrimaryScreen();
+    show();
+    raise();
+    update();
+}
+
 void OverlayWidget::showTranscribing(const QString &outputLabel)
 {
     mode_ = Mode::Transcribing;
@@ -213,6 +229,8 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     QColor accent(70, 190, 130);
     if (mode_ == Mode::Recording) {
         accent = QColor(229, 70, 78);
+    } else if (mode_ == Mode::Listening) {
+        accent = QColor(70, 190, 130);
     } else if (mode_ == Mode::Transcribing) {
         accent = QColor(80, 155, 230);
     } else if (mode_ == Mode::Error) {
