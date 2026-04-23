@@ -19,6 +19,10 @@ add_executable(speak-to-computer
     src/ClipboardPaster.h
     src/OverlayWidget.cpp
     src/OverlayWidget.h
+    src/VadEndpointDetector.cpp
+    src/VadEndpointDetector.h
+    src/WebRtcVad.cpp
+    src/WebRtcVad.h
     src/TranscriptCleaner.cpp
     src/TranscriptCleaner.h
     src/SpeakToComputerApp.cpp
@@ -27,6 +31,8 @@ add_executable(speak-to-computer
     src/WavWriter.h
     src/WhisperRunner.cpp
     src/WhisperRunner.h
+    src/WakeWordListener.cpp
+    src/WakeWordListener.h
     src/X11Hotkey.cpp
     src/X11Hotkey.h
     src/main.cpp
@@ -57,6 +63,20 @@ add_custom_command(TARGET speak-to-computer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
     ${CMAKE_CURRENT_SOURCE_DIR}/src/end_sound.wav
     $<TARGET_FILE_DIR:speak-to-computer>
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/openwakeword_sidecar.py
+    $<TARGET_FILE_DIR:speak-to-computer>
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/install-openwakeword-runtime.sh
+    $<TARGET_FILE_DIR:speak-to-computer>
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+    $<TARGET_FILE_DIR:speak-to-computer>/openwakeword
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/openwakeword/requirements.txt
+    $<TARGET_FILE_DIR:speak-to-computer>/openwakeword
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/openwakeword/smoke_test.py
+    $<TARGET_FILE_DIR:speak-to-computer>/openwakeword
 )
 
 if(BUILD_TESTING)
@@ -69,6 +89,10 @@ if(BUILD_TESTING)
         src/AudioRecorder.h
         src/TranscriptCleaner.cpp
         src/TranscriptCleaner.h
+        src/VadEndpointDetector.cpp
+        src/VadEndpointDetector.h
+        src/WebRtcVad.cpp
+        src/WebRtcVad.h
         src/WavWriter.cpp
         src/WavWriter.h
         src/WhisperRunner.cpp

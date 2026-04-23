@@ -289,6 +289,7 @@ void AudioRecorder::readPendingAudio()
     }
 
     pcm_.append(chunk);
+    emit audioChunkCaptured(chunk);
     emit levelChanged(levelFromPcm16(chunk));
 }
 

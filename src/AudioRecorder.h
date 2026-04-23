@@ -39,6 +39,7 @@ public:
 
 signals:
     void levelChanged(double level);
+    void audioChunkCaptured(const QByteArray &chunk);
     void failed(const QString &message);
 
 private:

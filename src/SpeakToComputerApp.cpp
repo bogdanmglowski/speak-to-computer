@@ -1,5 +1,6 @@
 #include "SpeakToComputerApp.h"
 
+#include "WebRtcVad.h"
 #include "WavWriter.h"
 
 #include <QAction>
@@ -15,6 +16,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QProcess>
+#include <QSignalBlocker>
 #include <QLocale>
 #include <QStandardPaths>
 #include <QSystemTrayIcon>
@@ -84,9 +86,31 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
         handleHotkey(OutputMode::English, translateHotkey_);
     });
     connect(&recorder_, &AudioRecorder::levelChanged, &overlay_, &OverlayWidget::setAudioLevel);
+    connect(&recorder_, &AudioRecorder::audioChunkCaptured, this, [this](const QByteArray &chunk) {
+        if (state_ != State::Recording || !vadEnabledForCurrentRecording_ || recordingStopRequested_) {
+            return;
+        }
+
+        QString errorMessage;
+        if (!vadEndpointDetector_.consumePcmChunk(chunk, &errorMessage)) {
+            qWarning().noquote() << "VAD auto-stop disabled for current recording:" << errorMessage;
+            vadEnabledForCurrentRecording_ = false;
+            return;
+        }
+        if (!vadEndpointDetector_.shouldAutoStop()) {
+            return;
+        }
+
+        recordingStopRequested_ = true;
+        QTimer::singleShot(0, this, [this]() {
+            stopRecording(currentOutputMode_);
+        });
+    });
     connect(&recorder_, &AudioRecorder::failed, this, &SpeakToComputerApp::handleRecordingFailed);
     connect(&whisper_, &WhisperRunner::transcriptionReady, this, &SpeakToComputerApp::handleTranscriptionReady);
     connect(&whisper_, &WhisperRunner::failed, this, &SpeakToComputerApp::handleTranscriptionFailed);
+    connect(&wakeWordListener_, &WakeWordListener::detected, this, &SpeakToComputerApp::handleWakeWordDetected);
+    connect(&wakeWordListener_, &WakeWordListener::failed, this, &SpeakToComputerApp::handleWakeWordFailure);
     connect(&overlay_, &OverlayWidget::modelSelected, this, &SpeakToComputerApp::handleModelSelected);
     connect(&elapsedTimer_, &QTimer::timeout, this, [this]() {
         overlay_.setElapsedMs(recordingClock_.elapsed());
@@ -127,7 +151,10 @@ bool SpeakToComputerApp::start()
     qInfo().noquote() << "speak-to-computer listening for dictation hotkey" << settings_.hotkeyDictate
                       << "and English hotkey" << settings_.hotkeyTranslateEn;
     qInfo().noquote() << "settings:" << settings_.settingsPath;
+    refreshVadRuntimeStatus();
     trayStatusOverride_.clear();
+    wakeWordAvailable_ = true;
+    updateWakeWordListening();
     updateTrayStatus();
     return true;
 }
@@ -140,16 +167,20 @@ void SpeakToComputerApp::handleHotkey(OutputMode outputMode, const X11Hotkey &so
     hotkeyDebounce_.restart();
 
     if (state_ == State::Idle) {
-        startRecording(outputMode, sourceHotkey);
+        startRecording(outputMode, sourceHotkey.activeWindow());
     } else if (state_ == State::Recording) {
         stopRecording(outputMode);
     }
 }
 
-void SpeakToComputerApp::startRecording(OutputMode outputMode, const X11Hotkey &sourceHotkey)
+void SpeakToComputerApp::startRecording(OutputMode outputMode, quint64 targetWindow)
 {
+    stopWakeWordListening();
     trayStatusOverride_.clear();
     overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+    recordingStopRequested_ = false;
+    vadEnabledForCurrentRecording_ = false;
+    vadEndpointDetector_.clear();
 
     QString errorMessage;
     if (!validateRuntime(&errorMessage)) {
@@ -158,32 +189,59 @@ void SpeakToComputerApp::startRecording(OutputMode outputMode, const X11Hotkey &
     }
 
     currentOutputMode_ = outputMode;
-    targetWindow_ = sourceHotkey.activeWindow();
+    targetWindow_ = targetWindow;
+    playActivationSound();
     if (!recorder_.start(settings_.audioBackend, &errorMessage)) {
         showErrorAndReturnIdle(errorMessage);
         return;
+    }
+
+    if (settings_.vadAutostopEnabled) {
+        refreshVadRuntimeStatus();
+        if (!vadRuntimeAvailable_) {
+            qWarning().noquote() << "VAD auto-stop unavailable:" << vadRuntimeError_;
+        } else {
+            const VadEndpointConfig vadConfig{
+                    settings_.vadAggressiveness,
+                    settings_.vadEndSilenceMs,
+                    settings_.vadMinSpeechMs,
+            };
+            QString vadErrorMessage;
+            if (vadEndpointDetector_.reset(vadConfig, &vadErrorMessage)) {
+                vadEnabledForCurrentRecording_ = true;
+            } else {
+                qWarning().noquote() << "VAD auto-stop disabled:" << vadErrorMessage;
+            }
+        }
     }
 
     state_ = State::Recording;
     recordingClock_.restart();
     elapsedTimer_.start();
     overlay_.setModelControlEnabled(true);
-    playActivationSound();
     overlay_.showRecording(outputLabel(currentOutputMode_), recordingHints());
     updateTrayStatus();
     qInfo().noquote() << "recording started using audio backend" << recorder_.activeBackendName()
-                      << "output" << outputLabel(currentOutputMode_);
+                      << "output" << outputLabel(currentOutputMode_)
+                      << "vadAutoStop" << (vadEnabledForCurrentRecording_ ? "enabled" : "disabled");
 }
 
 void SpeakToComputerApp::stopRecording(OutputMode outputMode)
 {
+    if (state_ != State::Recording) {
+        return;
+    }
+
+    recordingStopRequested_ = true;
+    vadEnabledForCurrentRecording_ = false;
+    vadEndpointDetector_.clear();
     currentOutputMode_ = outputMode;
     trayStatusOverride_.clear();
     elapsedTimer_.stop();
-    playEndSound();
 
     QString errorMessage;
     const QByteArray pcm = recorder_.stop(&errorMessage);
+    playEndSound();
     if (!errorMessage.isEmpty()) {
         showErrorAndReturnIdle(errorMessage);
         return;
@@ -229,6 +287,7 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
     trayStatusOverride_.clear();
     overlay_.setModelControlEnabled(true);
     overlay_.showDone(QStringLiteral("%1 text pasted into the active window").arg(outputLabel(currentOutputMode_)));
+    updateWakeWordListening();
     updateTrayStatus();
     qInfo() << "transcription pasted";
     QTimer::singleShot(900, &overlay_, &OverlayWidget::hide);
@@ -273,6 +332,127 @@ void SpeakToComputerApp::handleModelSelected(const QString &modelPath)
         qWarning().noquote() << errorMessage;
         return;
     }
+}
+
+void SpeakToComputerApp::handleWakeWordDetected()
+{
+    if (state_ != State::Idle || !settings_.wakeWordEnabled || !wakeWordAvailable_) {
+        return;
+    }
+
+    const quint64 activeWindow = dictateHotkey_.activeWindow();
+    startRecording(OutputMode::Original, activeWindow);
+}
+
+void SpeakToComputerApp::handleWakeWordFailure(const QString &message)
+{
+    disableWakeWordWithError(message);
+}
+
+void SpeakToComputerApp::handleWakeWordToggled(bool enabled)
+{
+    QString errorMessage;
+    if (!AppSettings::saveWakeWordEnabled(settings_.settingsPath, enabled, &errorMessage)) {
+        qWarning().noquote() << errorMessage;
+    }
+
+    settings_.wakeWordEnabled = enabled;
+    wakeWordAvailable_ = true;
+    if (!enabled) {
+        stopWakeWordListening();
+        trayStatusOverride_.clear();
+        overlay_.showDone(QStringLiteral("Wake-word listening disabled"));
+        updateTrayStatus();
+        QTimer::singleShot(900, &overlay_, &OverlayWidget::hide);
+        return;
+    }
+
+    updateWakeWordListening();
+    if (wakeWordListener_.isRunning()) {
+        showWakeWordListeningStatus();
+    }
+}
+
+void SpeakToComputerApp::handleVadAutostopToggled(bool enabled)
+{
+    QString errorMessage;
+    if (!AppSettings::saveVadAutostopEnabled(settings_.settingsPath, enabled, &errorMessage)) {
+        qWarning().noquote() << errorMessage;
+    }
+    settings_.vadAutostopEnabled = enabled;
+    refreshVadRuntimeStatus();
+    updateTrayStatus();
+}
+
+void SpeakToComputerApp::updateWakeWordListening()
+{
+    if (state_ != State::Idle || !settings_.wakeWordEnabled || !wakeWordAvailable_) {
+        stopWakeWordListening();
+        updateTrayStatus();
+        return;
+    }
+    if (wakeWordListener_.isRunning()) {
+        updateTrayStatus();
+        return;
+    }
+
+    QString errorMessage;
+    if (!wakeWordListener_.start(settings_, &errorMessage)) {
+        disableWakeWordWithError(errorMessage);
+        return;
+    }
+    showWakeWordListeningStatus();
+    updateTrayStatus();
+}
+
+void SpeakToComputerApp::stopWakeWordListening()
+{
+    if (wakeWordListener_.isRunning()) {
+        wakeWordListener_.stop();
+    }
+}
+
+void SpeakToComputerApp::showWakeWordListeningStatus()
+{
+    if (state_ != State::Idle || !wakeWordListener_.isRunning()) {
+        return;
+    }
+
+    trayStatusOverride_.clear();
+    overlay_.setModelControlEnabled(true);
+    overlay_.showListening(settings_.wakeWordPhrase);
+    QTimer::singleShot(1100, &overlay_, &OverlayWidget::hide);
+}
+
+void SpeakToComputerApp::disableWakeWordWithError(const QString &message)
+{
+    stopWakeWordListening();
+    wakeWordAvailable_ = false;
+    settings_.wakeWordEnabled = false;
+    QString saveErrorMessage;
+    if (!AppSettings::saveWakeWordEnabled(settings_.settingsPath, false, &saveErrorMessage)) {
+        qWarning().noquote() << saveErrorMessage;
+    }
+    if (trayWakeWordAction_ != nullptr) {
+        const QSignalBlocker blocker(trayWakeWordAction_);
+        trayWakeWordAction_->setChecked(false);
+    }
+    trayStatusOverride_ = QStringLiteral("Wake word disabled: %1").arg(message);
+    overlay_.showError(QStringLiteral("Wake word disabled: %1").arg(message), QStringLiteral("Wake word"));
+    updateTrayStatus();
+}
+
+void SpeakToComputerApp::refreshVadRuntimeStatus()
+{
+    if (!settings_.vadAutostopEnabled) {
+        vadRuntimeAvailable_ = true;
+        vadRuntimeError_.clear();
+        return;
+    }
+
+    QString runtimeError;
+    vadRuntimeAvailable_ = WebRtcVad::isRuntimeAvailable(&runtimeError);
+    vadRuntimeError_ = runtimeError;
 }
 
 bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const
@@ -402,6 +582,7 @@ bool SpeakToComputerApp::maybeOfferModelFallback(const QString &message)
     overlay_.setModelControlEnabled(true);
     overlay_.showDone(QStringLiteral("Switched to %1. Press %2 to retry.")
                               .arg(fallbackLabel, hotkeyFor(currentOutputMode_)));
+    updateWakeWordListening();
     updateTrayStatus();
     QTimer::singleShot(1400, &overlay_, &OverlayWidget::hide);
     return true;
@@ -458,6 +639,25 @@ QString SpeakToComputerApp::trayStatusText() const
     if (state_ == State::Transcribing) {
         return QStringLiteral("Transcribing %1.").arg(outputLabel(currentOutputMode_));
     }
+    if (settings_.wakeWordEnabled) {
+        if (wakeWordListener_.isRunning()) {
+            if (settings_.vadAutostopEnabled && !vadRuntimeAvailable_) {
+                return QStringLiteral("Wake word ON. VAD auto-stop unavailable: missing libfvad. %1 dictates, %2 translates.")
+                        .arg(settings_.hotkeyDictate, settings_.hotkeyTranslateEn);
+            }
+            return QStringLiteral("Listening for wake word \"%1\". %2 dictates, %3 translates to English.")
+                    .arg(settings_.wakeWordPhrase, settings_.hotkeyDictate, settings_.hotkeyTranslateEn);
+        }
+        if (settings_.vadAutostopEnabled && !vadRuntimeAvailable_) {
+            return QStringLiteral("Wake word enabled, VAD auto-stop unavailable: missing libfvad.");
+        }
+        return QStringLiteral("Wake word is enabled but unavailable. %1 dictates, %2 translates to English.")
+                .arg(settings_.hotkeyDictate, settings_.hotkeyTranslateEn);
+    }
+    if (settings_.vadAutostopEnabled && !vadRuntimeAvailable_) {
+        return QStringLiteral("Ready. VAD auto-stop unavailable: missing libfvad. %1 dictates, %2 translates.")
+                .arg(settings_.hotkeyDictate, settings_.hotkeyTranslateEn);
+    }
     return QStringLiteral("Ready. %1 dictates, %2 translates to English.")
             .arg(settings_.hotkeyDictate, settings_.hotkeyTranslateEn);
 }
@@ -470,6 +670,14 @@ void SpeakToComputerApp::setupTrayIcon()
 
     trayStatusAction_ = trayMenu_.addAction(trayStatusText());
     trayStatusAction_->setEnabled(false);
+    trayWakeWordAction_ = trayMenu_.addAction(QStringLiteral("Wake Word Listening"));
+    trayWakeWordAction_->setCheckable(true);
+    trayWakeWordAction_->setChecked(settings_.wakeWordEnabled);
+    connect(trayWakeWordAction_, &QAction::toggled, this, &SpeakToComputerApp::handleWakeWordToggled);
+    trayVadAutostopAction_ = trayMenu_.addAction(QStringLiteral("Voice Activity Auto-Stop"));
+    trayVadAutostopAction_->setCheckable(true);
+    trayVadAutostopAction_->setChecked(settings_.vadAutostopEnabled);
+    connect(trayVadAutostopAction_, &QAction::toggled, this, &SpeakToComputerApp::handleVadAutostopToggled);
     trayMenu_.addSeparator();
     trayQuitAction_ = trayMenu_.addAction(QStringLiteral("Quit"));
     connect(trayQuitAction_, &QAction::triggered, this, &SpeakToComputerApp::quitApplication);
@@ -486,6 +694,15 @@ void SpeakToComputerApp::setupTrayIcon()
 
 void SpeakToComputerApp::updateTrayStatus()
 {
+    if (trayWakeWordAction_ != nullptr && trayWakeWordAction_->isChecked() != settings_.wakeWordEnabled) {
+        const QSignalBlocker blocker(trayWakeWordAction_);
+        trayWakeWordAction_->setChecked(settings_.wakeWordEnabled);
+    }
+    if (trayVadAutostopAction_ != nullptr && trayVadAutostopAction_->isChecked() != settings_.vadAutostopEnabled) {
+        const QSignalBlocker blocker(trayVadAutostopAction_);
+        trayVadAutostopAction_->setChecked(settings_.vadAutostopEnabled);
+    }
+
     const QString status = trayStatusText();
     if (trayStatusAction_ != nullptr) {
         trayStatusAction_->setText(status);
@@ -496,23 +713,32 @@ void SpeakToComputerApp::updateTrayStatus()
 void SpeakToComputerApp::showAlertAndReturnIdle(const QString &message)
 {
     state_ = State::Idle;
+    recordingStopRequested_ = false;
+    vadEnabledForCurrentRecording_ = false;
+    vadEndpointDetector_.clear();
     trayStatusOverride_ = QStringLiteral("Alert: %1").arg(message);
     overlay_.setModelControlEnabled(true);
     overlay_.showError(message, QStringLiteral("Dictation alert"));
+    updateWakeWordListening();
     updateTrayStatus();
 }
 
 void SpeakToComputerApp::showErrorAndReturnIdle(const QString &message)
 {
     state_ = State::Idle;
+    recordingStopRequested_ = false;
+    vadEnabledForCurrentRecording_ = false;
+    vadEndpointDetector_.clear();
     trayStatusOverride_ = QStringLiteral("Error: %1").arg(message);
     overlay_.setModelControlEnabled(true);
     overlay_.showError(message);
+    updateWakeWordListening();
     updateTrayStatus();
 }
 
 void SpeakToComputerApp::quitApplication()
 {
+    stopWakeWordListening();
     trayIcon_.hide();
     QCoreApplication::quit();
 }
