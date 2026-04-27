@@ -218,7 +218,9 @@ recording, pressing the other hotkey stops the recording and uses that output
 instead.
 
 The app runs in the background and exposes a system tray icon. Right-click the
-tray icon and choose `Quit` to stop it.
+tray icon and choose `Quit` to stop it. Tray toggles:
+- `Wake Word Listening` enables/disables wake-word trigger.
+- `Voice Activity Auto-Stop` enables/disables VAD-based auto-stop (speech then silence).
 
 ## Install Autostart
 
@@ -229,12 +231,24 @@ cd $APP_LOCATION/speak-to-computer
 ./scripts/install-autostart.sh
 ```
 
+The installer also tries to install `libfvad` (VAD runtime dependency) using
+your system package manager when available.
+
 The install script copies the freshly built binary and default notification sounds to:
 
 ```bash
 ~/.local/bin/speak-to-computer
 ~/.local/bin/activation_sound.wav
 ~/.local/bin/end_sound.wav
+```
+
+Wake-word runtime files are copied to:
+
+```bash
+~/.local/share/speak-to-computer/python/openwakeword_sidecar.py
+~/.local/share/speak-to-computer/python/install-openwakeword-runtime.sh
+~/.local/share/speak-to-computer/python/openwakeword/requirements.txt
+~/.local/share/speak-to-computer/python/openwakeword/smoke_test.py
 ```
 
 It also writes:
@@ -272,6 +286,16 @@ whisper_cli=~/whisper.cpp/build/bin/whisper-cli
 model=~/whisper.cpp/models/ggml-small.bin
 activation_sound=activation_sound.wav
 end_sound=end_sound.wav
+wake_word_enabled=false
+wake_word_phrase=alexa
+wake_word_model_path=
+wake_word_threshold=0.5
+wake_word_sidecar_executable=~/.local/share/speak-to-computer/python/.venv/bin/python
+wake_word_sidecar_script=~/.local/share/speak-to-computer/python/openwakeword_sidecar.py
+vad_autostop_enabled=false
+vad_aggressiveness=2
+vad_end_silence_ms=900
+vad_min_speech_ms=250
 ```
 
 Set `language=auto` to let Whisper detect the spoken language. Use `language=en`
@@ -287,3 +311,105 @@ the hotkey used for the current recording, not stored as a persistent setting.
 Systems using `pavucontrol` usually have a PulseAudio-compatible server, so
 `audio_backend=pulseaudio` should work with either classic PulseAudio or
 PipeWire's PulseAudio compatibility layer.
+
+`vad_autostop_enabled=true` auto-stops recording only after speech is detected
+and then trailing silence reaches `vad_end_silence_ms`. Silence without speech
+does not auto-stop recording. Manual hotkey stop always works regardless of VAD
+state.
+
+### VAD Auto-Stop Runtime (`libfvad`)
+
+`Voice Activity Auto-Stop` depends on `libfvad` at runtime.
+
+The autostart installer (`./scripts/install-autostart.sh`) tries to install it
+automatically, but some distributions do not provide `libfvad` in their
+repositories (for example Pop!_OS 24.04 / Ubuntu 24.04).
+
+Try package manager install first:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libfvad-dev
+```
+
+If package installation fails (`Unable to locate package libfvad`), build it
+from source:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git build-essential autoconf automake libtool pkg-config
+
+git clone https://github.com/dpirch/libfvad.git /tmp/libfvad
+cd /tmp/libfvad
+autoreconf -i
+./configure --prefix=/usr/local
+make -j"$(nproc)"
+sudo make install
+sudo ldconfig
+```
+
+Verify installation:
+
+```bash
+ldconfig -p | grep -i fvad
+```
+
+Expected output should include `libfvad.so` and `libfvad.so.0` (for example
+from `/usr/local/lib`).
+
+After installation, restart the app. If needed, tune settings in
+`~/.config/speak-to-computer/settings.ini`:
+
+```ini
+vad_autostop_enabled=true
+vad_aggressiveness=0
+vad_min_speech_ms=120
+vad_end_silence_ms=700
+```
+
+## Wake Word (optional)
+
+Wake-word detection is optional and uses `openwakeword` through a local Python
+sidecar. It does not send microphone data to cloud services.
+
+Install wake-word runtime (creates dedicated venv and installs dependencies):
+
+```bash
+~/.local/share/speak-to-computer/python/install-openwakeword-runtime.sh
+```
+The installer also downloads required openWakeWord models (including `alexa`).
+For current `openwakeword==0.6.0` Linux runtime, the installer pins `numpy<2`
+to stay compatible with `tflite-runtime`.
+
+If your default `python3` is 3.12+, install Python 3.11 (or 3.10) and run:
+
+```bash
+PYTHON_BIN=python3.11 ~/.local/share/speak-to-computer/python/install-openwakeword-runtime.sh
+```
+
+On Pop!_OS 24.04 / Ubuntu 24.04, a simple option is `uv`:
+
+```bash
+uv python install 3.11
+~/.local/share/speak-to-computer/python/install-openwakeword-runtime.sh
+```
+
+Enable wake-word listening in `settings.ini`:
+
+```ini
+wake_word_enabled=true
+wake_word_phrase=alexa
+```
+
+With the defaults above, the sidecar uses:
+
+- `~/.local/share/speak-to-computer/python/.venv/bin/python`
+- `~/.local/share/speak-to-computer/python/openwakeword_sidecar.py`
+
+The sidecar auto-resolves the bundled Alexa model from the installed
+`openwakeword` package. You only need `wake_word_model_path` if you want to
+override with a custom ONNX/TFLite model.
+
+You can also enable/disable wake-word listening at runtime from the tray menu
+(`Wake Word Listening`). After detection, the app starts the same recording
+flow as `Super+Space`, then returns to listening mode.

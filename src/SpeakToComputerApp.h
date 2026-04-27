@@ -4,6 +4,8 @@
 #include "AudioRecorder.h"
 #include "ClipboardPaster.h"
 #include "OverlayWidget.h"
+#include "VadEndpointDetector.h"
+#include "WakeWordListener.h"
 #include "WhisperRunner.h"
 #include "X11Hotkey.h"
 
@@ -29,6 +31,11 @@ private slots:
     void handleTranscriptionFailed(const QString &message);
     void handleRecordingFailed(const QString &message);
     void handleModelSelected(const QString &modelPath);
+    void handleWakeWordDetected();
+    void handleWakeWordFailure(const QString &message);
+    void handleWakeWordToggled(bool enabled);
+    void handleVadAutostopToggled(bool enabled);
+    void handleVadPresetSelected(bool enabled, int endSilenceMs);
     void quitApplication();
 
 private:
@@ -44,8 +51,13 @@ private:
     };
 
     void handleHotkey(OutputMode outputMode, const X11Hotkey &sourceHotkey);
-    void startRecording(OutputMode outputMode, const X11Hotkey &sourceHotkey);
+    void startRecording(OutputMode outputMode, quint64 targetWindow);
     void stopRecording(OutputMode outputMode);
+    void updateWakeWordListening();
+    void stopWakeWordListening();
+    void showWakeWordListeningStatus();
+    void disableWakeWordWithError(const QString &message);
+    void refreshVadRuntimeStatus();
     bool validateRuntime(QString *errorMessage) const;
     QString fallbackModelPathForInitializationFailure() const;
     bool applyModelSelection(const QString &selectedModelPath, QString *errorMessage);
@@ -58,6 +70,8 @@ private:
     QString trayStatusText() const;
     void setupTrayIcon();
     void updateTrayStatus();
+    void updateOverlayVadControl();
+    void configureVadForCurrentRecording();
     void showAlertAndReturnIdle(const QString &message);
     void showErrorAndReturnIdle(const QString &message);
     void removeCurrentWav();
@@ -77,10 +91,19 @@ private:
     QElapsedTimer recordingClock_;
     QElapsedTimer hotkeyDebounce_;
     QAction *trayStatusAction_ = nullptr;
+    QAction *trayWakeWordAction_ = nullptr;
+    QAction *trayVadAutostopAction_ = nullptr;
     QAction *trayQuitAction_ = nullptr;
     State state_ = State::Idle;
     OutputMode currentOutputMode_ = OutputMode::Original;
     quint64 targetWindow_ = 0;
     QString currentWavPath_;
     QString trayStatusOverride_;
+    WakeWordListener wakeWordListener_;
+    VadEndpointDetector vadEndpointDetector_;
+    bool wakeWordAvailable_ = true;
+    bool vadEnabledForCurrentRecording_ = false;
+    bool vadRuntimeAvailable_ = true;
+    QString vadRuntimeError_;
+    bool recordingStopRequested_ = false;
 };

@@ -1,6 +1,7 @@
 #include "AppSettings.h"
 #include "AudioRecorder.h"
 #include "TranscriptCleaner.h"
+#include "VadEndpointDetector.h"
 #include "WavWriter.h"
 #include "WhisperRunner.h"
 
@@ -9,6 +10,9 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <QtEndian>
+
+#include <memory>
 
 class CoreBehaviorTest : public QObject {
     Q_OBJECT
@@ -21,6 +25,17 @@ private slots:
     void settingsShouldLoadSeparateHotkeyDefaults();
     void settingsShouldMigrateLegacyHotkeyToDictationHotkey();
     void settingsShouldIgnoreTranslateToEnglishAsSavedMode();
+    void settingsShouldLoadWakeWordDefaults();
+    void settingsShouldLoadWakeWordOverrides();
+    void settingsShouldSaveWakeWordEnabled();
+    void settingsShouldLoadVadDefaults();
+    void settingsShouldLoadVadOverrides();
+    void settingsShouldSaveVadAutostopEnabled();
+    void settingsShouldSaveAndReloadVadEndSilenceMs();
+    void settingsShouldFallbackToDefaultVadEndSilenceMsWhenInvalid();
+    void settingsShouldMigrateLegacyConfigWithoutVadKeys();
+    void settingsShouldMigrateLegacyWakeWordRuntimeDefaults();
+    void settingsShouldMigrateAppDataWakeWordRuntimeDefaults();
     void cleanupShouldTrimAndJoinTranscriptLines();
     void cleanupShouldDropWhisperNonSpeechAnnotations();
     void whisperRunnerShouldPassTranslateFlagWhenEnabled();
@@ -31,6 +46,9 @@ private slots:
     void recorderExplicitUnavailableBackendShouldFail();
     void recorderUnsupportedBackendShouldFail();
     void recorderAutoWithoutToolsShouldReportSupportedBackends();
+    void vadEndpointShouldAutostopAfterSpeechThenSilence();
+    void vadEndpointShouldNotAutostopWithoutSpeech();
+    void vadEndpointShouldIgnoreShortSpeechBursts();
 };
 
 namespace {
@@ -71,6 +89,38 @@ QString createFile(QTemporaryDir *dir, const QString &name, const QByteArray &co
 QString createFile(QTemporaryDir *dir, const QString &name)
 {
     return createFile(dir, name, "x");
+}
+
+class FakeVadFrameClassifier final : public VadFrameClassifier {
+public:
+    bool initialize(int aggressiveness, QString *errorMessage) override
+    {
+        Q_UNUSED(errorMessage);
+        return aggressiveness >= 0 && aggressiveness <= 3;
+    }
+
+    std::optional<bool> processFrame(
+            const int16_t *samples,
+            std::size_t sampleCount,
+            QString *errorMessage) override
+    {
+        Q_UNUSED(errorMessage);
+        if (samples == nullptr || sampleCount == 0) {
+            return std::nullopt;
+        }
+        return samples[0] != 0;
+    }
+};
+
+QByteArray vadFrame(bool speech)
+{
+    QByteArray frame(320 * static_cast<int>(sizeof(int16_t)), '\0');
+    if (!speech) {
+        return frame;
+    }
+
+    qToLittleEndian<int16_t>(1000, reinterpret_cast<uchar *>(frame.data()));
+    return frame;
 }
 
 } // namespace
@@ -175,6 +225,201 @@ void CoreBehaviorTest::settingsShouldIgnoreTranslateToEnglishAsSavedMode()
     const AppSettings settings = AppSettings::loadFromPath(settingsPath);
 
     QCOMPARE(settings.translateToEn, false);
+}
+
+void CoreBehaviorTest::settingsShouldLoadWakeWordDefaults()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QCOMPARE(settings.wakeWordEnabled, false);
+    QCOMPARE(settings.wakeWordPhrase, QStringLiteral("alexa"));
+    QCOMPARE(settings.wakeWordModelPath, QString());
+    QCOMPARE(settings.wakeWordThreshold, 0.5);
+    QVERIFY(settings.wakeWordSidecarExecutable.endsWith(QStringLiteral("/python/.venv/bin/python")));
+    QVERIFY(settings.wakeWordSidecarScript.endsWith(QStringLiteral("/python/openwakeword_sidecar.py")));
+}
+
+void CoreBehaviorTest::settingsShouldLoadWakeWordOverrides()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("wake_word_enabled"), true);
+    storedSettings.setValue(QStringLiteral("wake_word_phrase"), QStringLiteral("alexa"));
+    storedSettings.setValue(QStringLiteral("wake_word_model_path"), QStringLiteral("~/models/alexa_v0.1.onnx"));
+    storedSettings.setValue(QStringLiteral("wake_word_threshold"), 0.65);
+    storedSettings.setValue(QStringLiteral("wake_word_sidecar_executable"), QStringLiteral("/usr/bin/python3"));
+    storedSettings.setValue(QStringLiteral("wake_word_sidecar_script"), QStringLiteral("/opt/oww_sidecar.py"));
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QCOMPARE(settings.wakeWordEnabled, true);
+    QCOMPARE(settings.wakeWordPhrase, QStringLiteral("alexa"));
+    QCOMPARE(settings.wakeWordModelPath, QDir::home().filePath(QStringLiteral("models/alexa_v0.1.onnx")));
+    QCOMPARE(settings.wakeWordThreshold, 0.65);
+    QCOMPARE(settings.wakeWordSidecarExecutable, QStringLiteral("/usr/bin/python3"));
+    QCOMPARE(settings.wakeWordSidecarScript, QStringLiteral("/opt/oww_sidecar.py"));
+}
+
+void CoreBehaviorTest::settingsShouldSaveWakeWordEnabled()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QString errorMessage;
+    QVERIFY2(AppSettings::saveWakeWordEnabled(settingsPath, true, &errorMessage), qPrintable(errorMessage));
+
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    QCOMPARE(settings.value(QStringLiteral("wake_word_enabled")).toBool(), true);
+}
+
+void CoreBehaviorTest::settingsShouldLoadVadDefaults()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QCOMPARE(settings.vadAutostopEnabled, false);
+    QCOMPARE(settings.vadAggressiveness, 2);
+    QCOMPARE(settings.vadEndSilenceMs, 900);
+    QCOMPARE(settings.vadMinSpeechMs, 250);
+}
+
+void CoreBehaviorTest::settingsShouldLoadVadOverrides()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("vad_autostop_enabled"), true);
+    storedSettings.setValue(QStringLiteral("vad_aggressiveness"), 3);
+    storedSettings.setValue(QStringLiteral("vad_end_silence_ms"), 700);
+    storedSettings.setValue(QStringLiteral("vad_min_speech_ms"), 180);
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QCOMPARE(settings.vadAutostopEnabled, true);
+    QCOMPARE(settings.vadAggressiveness, 3);
+    QCOMPARE(settings.vadEndSilenceMs, 700);
+    QCOMPARE(settings.vadMinSpeechMs, 180);
+}
+
+void CoreBehaviorTest::settingsShouldSaveVadAutostopEnabled()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QString errorMessage;
+    QVERIFY2(AppSettings::saveVadAutostopEnabled(settingsPath, true, &errorMessage), qPrintable(errorMessage));
+
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    QCOMPARE(settings.value(QStringLiteral("vad_autostop_enabled")).toBool(), true);
+}
+
+void CoreBehaviorTest::settingsShouldSaveAndReloadVadEndSilenceMs()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QString errorMessage;
+    QVERIFY2(AppSettings::saveVadEndSilenceMs(settingsPath, 500, &errorMessage), qPrintable(errorMessage));
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+    QCOMPARE(settings.vadEndSilenceMs, 500);
+
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    QCOMPARE(storedSettings.value(QStringLiteral("vad_end_silence_ms")).toInt(), 500);
+}
+
+void CoreBehaviorTest::settingsShouldFallbackToDefaultVadEndSilenceMsWhenInvalid()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("vad_end_silence_ms"), 0);
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+    QCOMPARE(settings.vadEndSilenceMs, 900);
+}
+
+void CoreBehaviorTest::settingsShouldMigrateLegacyConfigWithoutVadKeys()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("hotkey_dictate"), QStringLiteral("Alt+Space"));
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QCOMPARE(settings.vadAutostopEnabled, false);
+    QCOMPARE(settings.vadAggressiveness, 2);
+    QCOMPARE(settings.vadEndSilenceMs, 900);
+    QCOMPARE(settings.vadMinSpeechMs, 250);
+
+    QSettings migratedSettings(settingsPath, QSettings::IniFormat);
+    QVERIFY(migratedSettings.contains(QStringLiteral("vad_autostop_enabled")));
+    QVERIFY(migratedSettings.contains(QStringLiteral("vad_aggressiveness")));
+    QVERIFY(migratedSettings.contains(QStringLiteral("vad_end_silence_ms")));
+    QVERIFY(migratedSettings.contains(QStringLiteral("vad_min_speech_ms")));
+}
+
+void CoreBehaviorTest::settingsShouldMigrateLegacyWakeWordRuntimeDefaults()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("wake_word_sidecar_executable"), QStringLiteral("python3"));
+    storedSettings.setValue(QStringLiteral("wake_word_sidecar_script"), QStringLiteral("openwakeword_sidecar.py"));
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QVERIFY(settings.wakeWordSidecarExecutable.endsWith(QStringLiteral("/python/.venv/bin/python")));
+    QVERIFY(settings.wakeWordSidecarScript.endsWith(QStringLiteral("/python/openwakeword_sidecar.py")));
+}
+
+void CoreBehaviorTest::settingsShouldMigrateAppDataWakeWordRuntimeDefaults()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    const QString legacyRuntimeRoot = QDir::home().filePath(QStringLiteral(".local/share/speak-to-computer/speak-to-computer/python"));
+    QSettings storedSettings(settingsPath, QSettings::IniFormat);
+    storedSettings.setValue(QStringLiteral("wake_word_sidecar_executable"),
+            QDir(legacyRuntimeRoot).filePath(QStringLiteral(".venv/bin/python")));
+    storedSettings.setValue(QStringLiteral("wake_word_sidecar_script"),
+            QDir(legacyRuntimeRoot).filePath(QStringLiteral("openwakeword_sidecar.py")));
+    storedSettings.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+
+    QVERIFY(settings.wakeWordSidecarExecutable.endsWith(QStringLiteral("/python/.venv/bin/python")));
+    QVERIFY(!settings.wakeWordSidecarExecutable.contains(QStringLiteral("/speak-to-computer/speak-to-computer/python")));
+    QVERIFY(settings.wakeWordSidecarScript.endsWith(QStringLiteral("/python/openwakeword_sidecar.py")));
+    QVERIFY(!settings.wakeWordSidecarScript.contains(QStringLiteral("/speak-to-computer/speak-to-computer/python")));
 }
 
 void CoreBehaviorTest::cleanupShouldTrimAndJoinTranscriptLines()
@@ -393,6 +638,57 @@ void CoreBehaviorTest::recorderAutoWithoutToolsShouldReportSupportedBackends()
     QVERIFY(error.contains(QStringLiteral("parec")));
     QVERIFY(error.contains(QStringLiteral("parecord")));
     QVERIFY(error.contains(QStringLiteral("arecord")));
+}
+
+void CoreBehaviorTest::vadEndpointShouldAutostopAfterSpeechThenSilence()
+{
+    VadEndpointDetector detector(std::make_unique<FakeVadFrameClassifier>());
+    QString errorMessage;
+    const VadEndpointConfig config{2, 200, 100};
+    QVERIFY2(detector.reset(config, &errorMessage), qPrintable(errorMessage));
+
+    for (int frameIndex = 0; frameIndex < 5; ++frameIndex) {
+        QVERIFY(detector.consumePcmChunk(vadFrame(true), &errorMessage));
+    }
+    QVERIFY(!detector.shouldAutoStop());
+
+    for (int frameIndex = 0; frameIndex < 9; ++frameIndex) {
+        QVERIFY(detector.consumePcmChunk(vadFrame(false), &errorMessage));
+    }
+    QVERIFY(!detector.shouldAutoStop());
+
+    QVERIFY(detector.consumePcmChunk(vadFrame(false), &errorMessage));
+    QVERIFY(detector.shouldAutoStop());
+}
+
+void CoreBehaviorTest::vadEndpointShouldNotAutostopWithoutSpeech()
+{
+    VadEndpointDetector detector(std::make_unique<FakeVadFrameClassifier>());
+    QString errorMessage;
+    const VadEndpointConfig config{2, 200, 100};
+    QVERIFY2(detector.reset(config, &errorMessage), qPrintable(errorMessage));
+
+    for (int frameIndex = 0; frameIndex < 20; ++frameIndex) {
+        QVERIFY(detector.consumePcmChunk(vadFrame(false), &errorMessage));
+    }
+    QVERIFY(!detector.shouldAutoStop());
+}
+
+void CoreBehaviorTest::vadEndpointShouldIgnoreShortSpeechBursts()
+{
+    VadEndpointDetector detector(std::make_unique<FakeVadFrameClassifier>());
+    QString errorMessage;
+    const VadEndpointConfig config{2, 200, 120};
+    QVERIFY2(detector.reset(config, &errorMessage), qPrintable(errorMessage));
+
+    for (int frameIndex = 0; frameIndex < 5; ++frameIndex) {
+        QVERIFY(detector.consumePcmChunk(vadFrame(true), &errorMessage));
+    }
+    for (int frameIndex = 0; frameIndex < 12; ++frameIndex) {
+        QVERIFY(detector.consumePcmChunk(vadFrame(false), &errorMessage));
+    }
+
+    QVERIFY(!detector.shouldAutoStop());
 }
 
 QTEST_MAIN(CoreBehaviorTest)

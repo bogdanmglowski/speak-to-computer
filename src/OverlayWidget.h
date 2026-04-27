@@ -17,6 +17,7 @@ public:
     explicit OverlayWidget(QWidget *parent = nullptr);
 
     void showRecording(const QString &outputLabel, const QStringList &hints);
+    void showListening(const QString &wakeWordPhrase);
     void showTranscribing(const QString &outputLabel);
     void showDone(const QString &message);
     void showError(const QString &message);
@@ -26,9 +27,12 @@ public:
     void setModelLabel(const QString &label);
     void setModelControlEnabled(bool enabled);
     void setAvailableModelPaths(const QStringList &modelPaths);
+    void setVadAutostopPreset(bool enabled, int endSilenceMs);
+    void setVadControlAvailable(bool available);
 
 signals:
     void modelSelected(const QString &modelPath);
+    void vadPresetSelected(bool enabled, int endSilenceMs);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -38,6 +42,7 @@ protected:
 
 private:
     enum class Mode {
+        Listening,
         Recording,
         Transcribing,
         Done,
@@ -50,7 +55,10 @@ private:
     void placeOnPrimaryScreen();
     QString elapsedText() const;
     QRectF modelChipRect(const QRectF &card) const;
+    QRectF vadChipRect(const QRectF &card) const;
+    QString vadChipLabel() const;
     void showModelMenu(const QPoint &globalPos);
+    void showVadMenu(const QPoint &globalPos);
 
     Mode mode_ = Mode::Recording;
     QString title_;
@@ -63,4 +71,7 @@ private:
     qint64 elapsedMs_ = 0;
     int errorDisplayId_ = 0;
     bool modelControlEnabled_ = true;
+    bool vadAutostopEnabled_ = false;
+    int vadEndSilenceMs_ = 900;
+    bool vadControlAvailable_ = true;
 };

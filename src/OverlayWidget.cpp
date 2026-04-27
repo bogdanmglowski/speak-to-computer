@@ -19,6 +19,7 @@
 #include <QTextOption>
 
 #include <algorithm>
+#include <array>
 
 namespace {
 
@@ -41,7 +42,13 @@ constexpr int modelChipRightPadding = 14;
 constexpr int modelChipHorizontalPadding = 11;
 constexpr int modelChipArrowWidth = 10;
 constexpr int modelChipGapToTitle = 12;
+constexpr int vadChipHeight = 28;
+constexpr int vadChipHorizontalPadding = 11;
+constexpr int vadChipArrowWidth = 10;
+constexpr int vadChipMinWidth = 124;
 constexpr int errorAutoHideMs = 15000;
+
+constexpr std::array<int, 4> vadPresetValues = {300, 500, 900, 1500};
 
 int windowHeightForBodyLines(int lineCount)
 {
@@ -90,6 +97,22 @@ void OverlayWidget::showRecording(const QString &outputLabel, const QStringList 
     title_ = QStringLiteral("Recording");
     subtitle_ = QStringLiteral("Output: %1").arg(outputLabel);
     secondarySubtitles_ = hints;
+    audioLevel_ = 0.0;
+    elapsedMs_ = 0;
+    errorText_->hide();
+    updateWindowSize();
+    placeOnPrimaryScreen();
+    show();
+    raise();
+    update();
+}
+
+void OverlayWidget::showListening(const QString &wakeWordPhrase)
+{
+    mode_ = Mode::Listening;
+    title_ = QStringLiteral("Listening");
+    subtitle_ = QStringLiteral("Wake word: %1").arg(wakeWordPhrase);
+    secondarySubtitles_ = QStringList{QStringLiteral("Say the wake word to start recording")};
     audioLevel_ = 0.0;
     elapsedMs_ = 0;
     errorText_->hide();
@@ -198,6 +221,29 @@ void OverlayWidget::setAvailableModelPaths(const QStringList &modelPaths)
     availableModelPaths_ = modelPaths;
 }
 
+void OverlayWidget::setVadAutostopPreset(bool enabled, int endSilenceMs)
+{
+    if (vadAutostopEnabled_ == enabled && vadEndSilenceMs_ == endSilenceMs) {
+        return;
+    }
+    vadAutostopEnabled_ = enabled;
+    vadEndSilenceMs_ = endSilenceMs;
+    if (mode_ == Mode::Recording) {
+        update();
+    }
+}
+
+void OverlayWidget::setVadControlAvailable(bool available)
+{
+    if (vadControlAvailable_ == available) {
+        return;
+    }
+    vadControlAvailable_ = available;
+    if (mode_ == Mode::Recording) {
+        update();
+    }
+}
+
 void OverlayWidget::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event)
@@ -213,6 +259,8 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     QColor accent(70, 190, 130);
     if (mode_ == Mode::Recording) {
         accent = QColor(229, 70, 78);
+    } else if (mode_ == Mode::Listening) {
+        accent = QColor(70, 190, 130);
     } else if (mode_ == Mode::Transcribing) {
         accent = QColor(80, 155, 230);
     } else if (mode_ == Mode::Error) {
@@ -277,6 +325,40 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     painter.drawText(QRectF(card.left() + textLeft, card.top() + bodyTop, bodyWidth, bodyTextHeight), body);
 
     qreal secondaryTop = card.top() + bodyTop + bodyTextHeight + bodyLineGap;
+    if (mode_ == Mode::Recording) {
+        const QRectF vadRect = vadChipRect(card);
+        const bool vadChipEnabled = vadControlAvailable_;
+        const int vadBorderAlpha = vadChipEnabled ? 44 : 28;
+        const int vadFillAlpha = vadChipEnabled ? 230 : 155;
+        const int vadTextAlpha = vadChipEnabled ? 255 : 135;
+
+        painter.setPen(QPen(QColor(255, 255, 255, vadBorderAlpha), 1));
+        painter.setBrush(QColor(32, 36, 43, vadFillAlpha));
+        painter.drawRoundedRect(vadRect, 6, 6);
+
+        painter.setFont(chipFont);
+        painter.setPen(QColor(220, 224, 232, vadTextAlpha));
+        const int trailingPadding = vadChipEnabled ? (vadChipArrowWidth + 8) : 0;
+        painter.drawText(vadRect.adjusted(vadChipHorizontalPadding, 0, -trailingPadding, 0),
+                Qt::AlignVCenter | Qt::AlignLeft,
+                vadChipLabel());
+
+        if (vadChipEnabled) {
+            const qreal arrowX = vadRect.right() - vadChipArrowWidth;
+            const qreal arrowY = vadRect.center().y() - 2.0;
+            QPolygonF arrow = {
+                    QPointF(arrowX - 4.0, arrowY),
+                    QPointF(arrowX + 4.0, arrowY),
+                    QPointF(arrowX, arrowY + 5.0),
+            };
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(220, 224, 232, 235));
+            painter.drawPolygon(arrow);
+        }
+
+        secondaryTop += vadChipHeight + bodyLineGap;
+    }
+
     for (const QString &secondarySubtitle : secondarySubtitles_) {
         QString secondaryBody = secondarySubtitle;
         secondaryBody = metrics.elidedText(secondaryBody, Qt::ElideRight, static_cast<int>(bodyWidth));
@@ -313,20 +395,35 @@ void OverlayWidget::mousePressEvent(QMouseEvent *event)
     }
 
     const QRectF card = rect().adjusted(8, 8, -8, -8);
-    const QRectF chipRect = modelChipRect(card);
-    if (!chipRect.contains(event->position())) {
-        QWidget::mousePressEvent(event);
+    const QRectF modelRect = modelChipRect(card);
+    if (modelRect.contains(event->position())) {
+        event->accept();
+        if (!modelControlEnabled_) {
+            return;
+        }
+
+        const QPoint menuPos = mapToGlobal(
+                QPoint(static_cast<int>(modelRect.left()), static_cast<int>(modelRect.bottom() + 2)));
+        showModelMenu(menuPos);
         return;
     }
 
-    event->accept();
-    if (!modelControlEnabled_) {
-        return;
+    if (mode_ == Mode::Recording) {
+        const QRectF vadRect = vadChipRect(card);
+        if (vadRect.contains(event->position())) {
+            event->accept();
+            if (!vadControlAvailable_) {
+                return;
+            }
+
+            const QPoint menuPos = mapToGlobal(
+                    QPoint(static_cast<int>(vadRect.left()), static_cast<int>(vadRect.bottom() + 2)));
+            showVadMenu(menuPos);
+            return;
+        }
     }
 
-    const QPoint menuPos = mapToGlobal(
-            QPoint(static_cast<int>(chipRect.left()), static_cast<int>(chipRect.bottom() + 2)));
-    showModelMenu(menuPos);
+    QWidget::mousePressEvent(event);
 }
 
 void OverlayWidget::resizeEvent(QResizeEvent *event)
@@ -346,7 +443,8 @@ void OverlayWidget::updateWindowSize()
     if (mode_ == Mode::Error) {
         setFixedSize(errorWindowSize());
     } else {
-        setFixedSize(defaultWidth, windowHeightForBodyLines(1 + secondarySubtitles_.size()));
+        const int bodyLineCount = 1 + secondarySubtitles_.size() + (mode_ == Mode::Recording ? 1 : 0);
+        setFixedSize(defaultWidth, windowHeightForBodyLines(bodyLineCount));
     }
     updateErrorTextGeometry();
 }
@@ -428,6 +526,34 @@ QRectF OverlayWidget::modelChipRect(const QRectF &card) const
     return QRectF(chipX, chipY, chipWidth, modelChipHeight);
 }
 
+QRectF OverlayWidget::vadChipRect(const QRectF &card) const
+{
+    QFont chipFont = font();
+    chipFont.setPointSize(10);
+    chipFont.setWeight(QFont::DemiBold);
+    const QFontMetrics chipMetrics(chipFont);
+    const bool showArrow = vadControlAvailable_;
+    const int textWidth = chipMetrics.horizontalAdvance(vadChipLabel());
+    const int chipWidth = std::clamp(
+            textWidth + vadChipHorizontalPadding * 2 + (showArrow ? vadChipArrowWidth + 8 : 0),
+            vadChipMinWidth,
+            std::max(vadChipMinWidth, static_cast<int>(card.width()) - textLeft - rightMargin));
+    const qreal chipX = card.left() + textLeft;
+    const qreal chipY = card.top() + bodyTop + bodyTextHeight + bodyLineGap;
+    return QRectF(chipX, chipY, chipWidth, vadChipHeight);
+}
+
+QString OverlayWidget::vadChipLabel() const
+{
+    if (!vadControlAvailable_) {
+        return QStringLiteral("Auto-stop unavailable");
+    }
+    if (!vadAutostopEnabled_) {
+        return QStringLiteral("Auto-stop: Off");
+    }
+    return QStringLiteral("Auto-stop: %1 ms").arg(vadEndSilenceMs_);
+}
+
 void OverlayWidget::showModelMenu(const QPoint &globalPos)
 {
     QMenu menu(this);
@@ -450,4 +576,31 @@ void OverlayWidget::showModelMenu(const QPoint &globalPos)
     if (selectedAction != nullptr) {
         emit modelSelected(selectedAction->data().toString());
     }
+}
+
+void OverlayWidget::showVadMenu(const QPoint &globalPos)
+{
+    QMenu menu(this);
+
+    QAction *offAction = menu.addAction(QStringLiteral("Off"));
+    offAction->setData(0);
+    offAction->setCheckable(true);
+    offAction->setChecked(!vadAutostopEnabled_);
+
+    menu.addSeparator();
+
+    for (const int presetValue : vadPresetValues) {
+        QAction *action = menu.addAction(QStringLiteral("%1 ms").arg(presetValue));
+        action->setData(presetValue);
+        action->setCheckable(true);
+        action->setChecked(vadAutostopEnabled_ && vadEndSilenceMs_ == presetValue);
+    }
+
+    QAction *selectedAction = menu.exec(globalPos);
+    if (selectedAction == nullptr) {
+        return;
+    }
+
+    const int presetValue = selectedAction->data().toInt();
+    emit vadPresetSelected(presetValue > 0, presetValue);
 }

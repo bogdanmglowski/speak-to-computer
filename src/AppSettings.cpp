@@ -29,6 +29,35 @@ QString bundledEndSound()
     return QStringLiteral("end_sound.wav");
 }
 
+QString defaultWakeWordPhrase()
+{
+    return QStringLiteral("alexa");
+}
+
+QString appDataRootPath()
+{
+    QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (appDataPath.isEmpty()) {
+        appDataPath = QDir::home().filePath(QStringLiteral(".local/share"));
+    }
+    return QDir(appDataPath).filePath(QStringLiteral("speak-to-computer"));
+}
+
+QString defaultWakeWordRuntimeDirectory()
+{
+    return QDir(appDataRootPath()).filePath(QStringLiteral("python"));
+}
+
+QString defaultWakeWordSidecarExecutable()
+{
+    return QDir(defaultWakeWordRuntimeDirectory()).filePath(QStringLiteral(".venv/bin/python"));
+}
+
+QString defaultWakeWordSidecarScript()
+{
+    return QDir(defaultWakeWordRuntimeDirectory()).filePath(QStringLiteral("openwakeword_sidecar.py"));
+}
+
 QString settingsFilePath()
 {
     const QString configRoot = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
@@ -75,6 +104,60 @@ void ensureDefaults(QSettings *settings)
     }
     if (!settings->contains(QStringLiteral("end_sound"))) {
         settings->setValue(QStringLiteral("end_sound"), bundledEndSound());
+    }
+    if (!settings->contains(QStringLiteral("wake_word_enabled"))) {
+        settings->setValue(QStringLiteral("wake_word_enabled"), false);
+    }
+    if (!settings->contains(QStringLiteral("wake_word_phrase"))) {
+        settings->setValue(QStringLiteral("wake_word_phrase"), defaultWakeWordPhrase());
+    }
+    if (!settings->contains(QStringLiteral("wake_word_model_path"))) {
+        settings->setValue(QStringLiteral("wake_word_model_path"), QStringLiteral(""));
+    }
+    if (!settings->contains(QStringLiteral("wake_word_threshold"))) {
+        settings->setValue(QStringLiteral("wake_word_threshold"), 0.5);
+    }
+    if (!settings->contains(QStringLiteral("wake_word_sidecar_executable"))) {
+        settings->setValue(QStringLiteral("wake_word_sidecar_executable"), defaultWakeWordSidecarExecutable());
+    }
+    if (!settings->contains(QStringLiteral("wake_word_sidecar_script"))) {
+        settings->setValue(QStringLiteral("wake_word_sidecar_script"), defaultWakeWordSidecarScript());
+    }
+    if (!settings->contains(QStringLiteral("vad_autostop_enabled"))) {
+        settings->setValue(QStringLiteral("vad_autostop_enabled"), false);
+    }
+    if (!settings->contains(QStringLiteral("vad_aggressiveness"))) {
+        settings->setValue(QStringLiteral("vad_aggressiveness"), 2);
+    }
+    if (!settings->contains(QStringLiteral("vad_end_silence_ms"))) {
+        settings->setValue(QStringLiteral("vad_end_silence_ms"), 900);
+    }
+    if (!settings->contains(QStringLiteral("vad_min_speech_ms"))) {
+        settings->setValue(QStringLiteral("vad_min_speech_ms"), 250);
+    }
+
+    const QString configuredSidecarExecutable =
+            settings->value(QStringLiteral("wake_word_sidecar_executable")).toString().trimmed();
+    const QString configuredSidecarScript =
+            settings->value(QStringLiteral("wake_word_sidecar_script")).toString().trimmed();
+    if (configuredSidecarExecutable == QStringLiteral("python3")
+            && configuredSidecarScript == QStringLiteral("openwakeword_sidecar.py")) {
+        settings->setValue(QStringLiteral("wake_word_sidecar_executable"), defaultWakeWordSidecarExecutable());
+        settings->setValue(QStringLiteral("wake_word_sidecar_script"), defaultWakeWordSidecarScript());
+    }
+
+    QString normalizedSidecarExecutable = configuredSidecarExecutable;
+    QString normalizedSidecarScript = configuredSidecarScript;
+    normalizedSidecarExecutable.replace(
+            QStringLiteral("/speak-to-computer/speak-to-computer/"),
+            QStringLiteral("/speak-to-computer/"));
+    normalizedSidecarScript.replace(
+            QStringLiteral("/speak-to-computer/speak-to-computer/"),
+            QStringLiteral("/speak-to-computer/"));
+    if (normalizedSidecarExecutable != configuredSidecarExecutable
+            && normalizedSidecarScript != configuredSidecarScript) {
+        settings->setValue(QStringLiteral("wake_word_sidecar_executable"), normalizedSidecarExecutable);
+        settings->setValue(QStringLiteral("wake_word_sidecar_script"), normalizedSidecarScript);
     }
 }
 
@@ -144,6 +227,61 @@ bool AppSettings::saveModel(const QString &settingsPath, const QString &modelPat
     return false;
 }
 
+bool AppSettings::saveWakeWordEnabled(const QString &settingsPath, bool enabled, QString *errorMessage)
+{
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("wake_word_enabled"), enabled);
+    settings.sync();
+
+    if (settings.status() == QSettings::NoError) {
+        return true;
+    }
+
+    if (errorMessage != nullptr) {
+        *errorMessage = QStringLiteral("Failed to save wake-word settings: %1").arg(settingsPath);
+    }
+    return false;
+}
+
+bool AppSettings::saveVadAutostopEnabled(const QString &settingsPath, bool enabled, QString *errorMessage)
+{
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("vad_autostop_enabled"), enabled);
+    settings.sync();
+
+    if (settings.status() == QSettings::NoError) {
+        return true;
+    }
+
+    if (errorMessage != nullptr) {
+        *errorMessage = QStringLiteral("Failed to save VAD auto-stop setting: %1").arg(settingsPath);
+    }
+    return false;
+}
+
+bool AppSettings::saveVadEndSilenceMs(const QString &settingsPath, int endSilenceMs, QString *errorMessage)
+{
+    if (endSilenceMs <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("VAD auto-stop silence must be positive.");
+        }
+        return false;
+    }
+
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("vad_end_silence_ms"), endSilenceMs);
+    settings.sync();
+
+    if (settings.status() == QSettings::NoError) {
+        return true;
+    }
+
+    if (errorMessage != nullptr) {
+        *errorMessage = QStringLiteral("Failed to save VAD silence duration: %1").arg(settingsPath);
+    }
+    return false;
+}
+
 AppSettings AppSettings::loadFromPath(const QString &settingsPath)
 {
     QDir().mkpath(QFileInfo(settingsPath).absolutePath());
@@ -163,6 +301,39 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     result.model = expandUserPath(settings.value(QStringLiteral("model")).toString());
     result.activationSound = expandUserPath(settings.value(QStringLiteral("activation_sound")).toString());
     result.endSound = expandUserPath(settings.value(QStringLiteral("end_sound")).toString());
+    result.wakeWordEnabled = settings.value(QStringLiteral("wake_word_enabled")).toBool();
+    result.wakeWordPhrase = settings.value(QStringLiteral("wake_word_phrase")).toString().trimmed();
+    result.wakeWordModelPath = expandUserPath(settings.value(QStringLiteral("wake_word_model_path")).toString());
+    result.wakeWordThreshold = settings.value(QStringLiteral("wake_word_threshold")).toDouble();
+    result.wakeWordSidecarExecutable = expandUserPath(
+            settings.value(QStringLiteral("wake_word_sidecar_executable")).toString());
+    result.wakeWordSidecarScript = expandUserPath(settings.value(QStringLiteral("wake_word_sidecar_script")).toString());
+    result.vadAutostopEnabled = settings.value(QStringLiteral("vad_autostop_enabled")).toBool();
+    result.vadAggressiveness = settings.value(QStringLiteral("vad_aggressiveness")).toInt();
+    result.vadEndSilenceMs = settings.value(QStringLiteral("vad_end_silence_ms")).toInt();
+    result.vadMinSpeechMs = settings.value(QStringLiteral("vad_min_speech_ms")).toInt();
+
+    if (result.wakeWordPhrase.isEmpty()) {
+        result.wakeWordPhrase = defaultWakeWordPhrase();
+    }
+    if (result.wakeWordThreshold <= 0.0 || result.wakeWordThreshold > 1.0) {
+        result.wakeWordThreshold = 0.5;
+    }
+    if (result.wakeWordSidecarExecutable.isEmpty()) {
+        result.wakeWordSidecarExecutable = defaultWakeWordSidecarExecutable();
+    }
+    if (result.wakeWordSidecarScript.isEmpty()) {
+        result.wakeWordSidecarScript = defaultWakeWordSidecarScript();
+    }
+    if (result.vadAggressiveness < 0 || result.vadAggressiveness > 3) {
+        result.vadAggressiveness = 2;
+    }
+    if (result.vadEndSilenceMs <= 0) {
+        result.vadEndSilenceMs = 900;
+    }
+    if (result.vadMinSpeechMs <= 0) {
+        result.vadMinSpeechMs = 250;
+    }
     return result;
 }
 
