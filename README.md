@@ -17,9 +17,8 @@ This is not a production-ready project, but it turned out to be somewhat useful,
 ## Future ideas
 
 Things I’d like to experiment with next:
-- make the sys tray icon transparent
 - add TLDR fast install instructions to the README
-- better logging + basic transcription history
+- add dictionary of special words
 
 
 ## Requirements
