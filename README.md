@@ -29,8 +29,8 @@
   - [Language mode](#language-mode)
   - [Hotkey behavior](#hotkey-behavior)
   - [Audio backend selection](#audio-backend-selection)
-  - [VAD auto-stop behavior](#vad-auto-stop-behavior)
-  - [VAD auto-stop runtime (`libfvad`)](#vad-auto-stop-runtime-libfvad)
+  - [VAD auto-stop behavior (optional)](#vad-auto-stop-behavior-optional)
+  - [VAD auto-stop runtime (`libfvad`, optional)](#vad-auto-stop-runtime-libfvad-optional)
     - [Try package manager install](#try-package-manager-install)
     - [Build `libfvad` from source](#build-libfvad-from-source)
     - [Verify `libfvad` installation](#verify-libfvad-installation)
@@ -67,6 +67,10 @@ Things I’d like to experiment with next:
 
 
 ## Requirements
+
+Core dictation and translation work without VAD and wake-word support. These are
+optional features and are disabled by default.
+
 - X11
 - Qt 6 development packages
 - CMake and a C++20 compiler
@@ -78,6 +82,10 @@ Things I’d like to experiment with next:
 - `xdotool`
 - `whisper.cpp` built at `~/whisper.cpp` (can be overridden with `whisper_cli` setting)
 - a multilingual Whisper model, defaulting to `ggml-small.bin` (can be overridden with `model` setting)
+
+Optional runtime dependencies:
+- VAD auto-stop: `libfvad`
+- Wake word: local Python runtime for `openwakeword`
 
 The current defaults:
 
@@ -272,8 +280,8 @@ instead.
 
 The app runs in the background and exposes a system tray icon. Right-click the
 tray icon and choose `Quit` to stop it. Tray toggles:
-- `Wake Word Listening` enables/disables wake-word trigger.
-- `Voice Activity Auto-Stop` enables/disables VAD-based auto-stop (speech then silence).
+- `Wake Word Listening` enables/disables the optional wake-word trigger.
+- `Voice Activity Auto-Stop` enables/disables optional VAD-based auto-stop (speech then silence).
 
 ## Install Autostart
 
@@ -337,6 +345,9 @@ The first run writes defaults to:
 ~/.config/speak-to-computer/settings.ini
 ```
 
+VAD and wake-word settings are optional. The app works normally with both
+features left disabled.
+
 ### Supported settings
 
 Supported settings:
@@ -383,14 +394,14 @@ Systems using `pavucontrol` usually have a PulseAudio-compatible server, so
 `audio_backend=pulseaudio` should work with either classic PulseAudio or
 PipeWire's PulseAudio compatibility layer.
 
-### VAD auto-stop behavior
+### VAD auto-stop behavior (optional)
 
 `vad_autostop_enabled=true` auto-stops recording only after speech is detected
 and then trailing silence reaches `vad_end_silence_ms`. Silence without speech
 does not auto-stop recording. Manual hotkey stop always works regardless of VAD
-state.
+state. If `libfvad` is unavailable, leave this feature disabled.
 
-### VAD Auto-Stop Runtime (`libfvad`)
+### VAD Auto-Stop Runtime (`libfvad`, optional)
 
 `Voice Activity Auto-Stop` depends on `libfvad` at runtime.
 
@@ -451,7 +462,8 @@ vad_end_silence_ms=700
 ## Wake Word (optional)
 
 Wake-word detection is optional and uses `openwakeword` through a local Python
-sidecar. It does not send microphone data to cloud services.
+sidecar. It does not send microphone data to cloud services. The app works
+normally without this feature.
 
 ### Install wake-word runtime
 
