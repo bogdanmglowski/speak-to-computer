@@ -22,6 +22,7 @@ private slots:
     void settingsShouldResolveModelLabel();
     void settingsShouldReturnOnlyExistingModelPaths();
     void settingsShouldSaveModelPath();
+    void settingsShouldSaveAndReloadAllEditableFields();
     void settingsShouldLoadSeparateHotkeyDefaults();
     void settingsShouldMigrateLegacyHotkeyToDictationHotkey();
     void settingsShouldIgnoreTranslateToEnglishAsSavedMode();
@@ -173,6 +174,63 @@ void CoreBehaviorTest::settingsShouldSaveModelPath()
 
     QSettings settings(settingsPath, QSettings::IniFormat);
     QCOMPARE(settings.value(QStringLiteral("model")).toString(), QStringLiteral("/tmp/ggml-medium.bin"));
+}
+
+void CoreBehaviorTest::settingsShouldSaveAndReloadAllEditableFields()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+
+    AppSettings expected;
+    expected.settingsPath = settingsPath;
+    expected.hotkeyDictate = QStringLiteral("Ctrl+Alt+D");
+    expected.hotkeyTranslateEn = QStringLiteral("Ctrl+Alt+E");
+    expected.audioBackend = QStringLiteral("pipewire");
+    expected.language = QStringLiteral("en");
+    expected.whisperCli = QStringLiteral("/opt/whisper-cli");
+    expected.model = QStringLiteral("/models/ggml-base.bin");
+    expected.activationSound = QStringLiteral("/sounds/start.wav");
+    expected.endSound = QStringLiteral("/sounds/end.wav");
+    expected.wakeWordEnabled = true;
+    expected.wakeWordPhrase = QStringLiteral("computer");
+    expected.wakeWordModelPath = QStringLiteral("/models/computer.onnx");
+    expected.wakeWordThreshold = 0.65;
+    expected.wakeWordSidecarExecutable = QStringLiteral("/venv/bin/python");
+    expected.wakeWordSidecarScript = QStringLiteral("/app/openwakeword_sidecar.py");
+    expected.vadAutostopEnabled = true;
+    expected.vadAggressiveness = 3;
+    expected.vadEndSilenceMs = 700;
+    expected.vadMinSpeechMs = 180;
+    expected.threads = 6;
+    expected.translateToEn = true;
+
+    QString errorMessage;
+    QVERIFY2(AppSettings::save(expected, &errorMessage), qPrintable(errorMessage));
+
+    const AppSettings actual = AppSettings::loadFromPath(settingsPath);
+    QCOMPARE(actual.settingsPath, settingsPath);
+    QCOMPARE(actual.hotkeyDictate, expected.hotkeyDictate);
+    QCOMPARE(actual.hotkeyTranslateEn, expected.hotkeyTranslateEn);
+    QCOMPARE(actual.audioBackend, expected.audioBackend);
+    QCOMPARE(actual.language, expected.language);
+    QCOMPARE(actual.whisperCli, expected.whisperCli);
+    QCOMPARE(actual.model, expected.model);
+    QCOMPARE(actual.activationSound, expected.activationSound);
+    QCOMPARE(actual.endSound, expected.endSound);
+    QCOMPARE(actual.wakeWordEnabled, expected.wakeWordEnabled);
+    QCOMPARE(actual.wakeWordPhrase, expected.wakeWordPhrase);
+    QCOMPARE(actual.wakeWordModelPath, expected.wakeWordModelPath);
+    QCOMPARE(actual.wakeWordThreshold, expected.wakeWordThreshold);
+    QCOMPARE(actual.wakeWordSidecarExecutable, expected.wakeWordSidecarExecutable);
+    QCOMPARE(actual.wakeWordSidecarScript, expected.wakeWordSidecarScript);
+    QCOMPARE(actual.vadAutostopEnabled, expected.vadAutostopEnabled);
+    QCOMPARE(actual.vadAggressiveness, expected.vadAggressiveness);
+    QCOMPARE(actual.vadEndSilenceMs, expected.vadEndSilenceMs);
+    QCOMPARE(actual.vadMinSpeechMs, expected.vadMinSpeechMs);
+    QCOMPARE(actual.threads, expected.threads);
+    QCOMPARE(actual.translateToEn, false);
 }
 
 void CoreBehaviorTest::settingsShouldLoadSeparateHotkeyDefaults()

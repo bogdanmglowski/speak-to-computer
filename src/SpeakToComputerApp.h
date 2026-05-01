@@ -31,6 +31,7 @@ private slots:
     void handleTranscriptionFailed(const QString &message);
     void handleRecordingFailed(const QString &message);
     void handleModelSelected(const QString &modelPath);
+    void showPreferences();
     void handleWakeWordDetected();
     void handleWakeWordFailure(const QString &message);
     void handleWakeWordToggled(bool enabled);
@@ -61,6 +62,7 @@ private:
     bool validateRuntime(QString *errorMessage) const;
     QString fallbackModelPathForInitializationFailure() const;
     bool applyModelSelection(const QString &selectedModelPath, QString *errorMessage);
+    bool applySettings(const AppSettings &newSettings, QString *errorMessage);
     bool maybeOfferModelFallback(const QString &message);
     QString outputLabel(OutputMode outputMode) const;
     QString originalLanguageLabel() const;
@@ -91,6 +93,7 @@ private:
     QElapsedTimer recordingClock_;
     QElapsedTimer hotkeyDebounce_;
     QAction *trayStatusAction_ = nullptr;
+    QAction *trayPreferencesAction_ = nullptr;
     QAction *trayWakeWordAction_ = nullptr;
     QAction *trayVadAutostopAction_ = nullptr;
     QAction *trayQuitAction_ = nullptr;

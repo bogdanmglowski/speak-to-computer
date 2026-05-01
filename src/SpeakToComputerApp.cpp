@@ -1,5 +1,6 @@
 #include "SpeakToComputerApp.h"
 
+#include "PreferencesDialog.h"
 #include "WebRtcVad.h"
 #include "WavWriter.h"
 
@@ -7,6 +8,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDialog>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -322,6 +324,40 @@ void SpeakToComputerApp::handleModelSelected(const QString &modelPath)
     }
 }
 
+void SpeakToComputerApp::showPreferences()
+{
+    if (state_ != State::Idle) {
+        overlay_.showError(QStringLiteral("Preferences can only be changed while the app is idle."),
+                QStringLiteral("Preferences"));
+        return;
+    }
+
+    stopWakeWordListening();
+
+    PreferencesDialog dialog(settings_);
+    dialog.setWindowIcon(trayIcon_.icon());
+    if (dialog.exec() != QDialog::Accepted) {
+        updateWakeWordListening();
+        updateTrayStatus();
+        return;
+    }
+
+    QString errorMessage;
+    if (!applySettings(dialog.editedSettings(), &errorMessage)) {
+        qWarning().noquote() << errorMessage;
+        overlay_.showError(errorMessage, QStringLiteral("Preferences"));
+        updateWakeWordListening();
+        updateTrayStatus();
+        return;
+    }
+
+    trayStatusOverride_.clear();
+    overlay_.showDone(QStringLiteral("Preferences saved"));
+    updateWakeWordListening();
+    updateTrayStatus();
+    QTimer::singleShot(900, &overlay_, &OverlayWidget::hide);
+}
+
 void SpeakToComputerApp::handleWakeWordDetected()
 {
     if (state_ != State::Idle || !settings_.wakeWordEnabled || !wakeWordAvailable_) {
@@ -588,6 +624,48 @@ bool SpeakToComputerApp::applyModelSelection(const QString &selectedModelPath, Q
     return true;
 }
 
+bool SpeakToComputerApp::applySettings(const AppSettings &newSettings, QString *errorMessage)
+{
+    QString hotkeyError;
+    if (!dictateHotkey_.registerHotkey(newSettings.hotkeyDictate, &hotkeyError)) {
+        if (!dictateHotkey_.registerHotkey(settings_.hotkeyDictate, nullptr)) {
+            qWarning() << "Failed to restore dictation hotkey after preferences error";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Could not register dictation hotkey %1: %2")
+                                    .arg(newSettings.hotkeyDictate, hotkeyError);
+        }
+        return false;
+    }
+
+    QString translateHotkeyError;
+    if (!translateHotkey_.registerHotkey(newSettings.hotkeyTranslateEn, &translateHotkeyError)) {
+        dictateHotkey_.registerHotkey(settings_.hotkeyDictate, nullptr);
+        translateHotkey_.registerHotkey(settings_.hotkeyTranslateEn, nullptr);
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Could not register English hotkey %1: %2")
+                                    .arg(newSettings.hotkeyTranslateEn, translateHotkeyError);
+        }
+        return false;
+    }
+
+    if (!AppSettings::save(newSettings, errorMessage)) {
+        dictateHotkey_.registerHotkey(settings_.hotkeyDictate, nullptr);
+        translateHotkey_.registerHotkey(settings_.hotkeyTranslateEn, nullptr);
+        return false;
+    }
+
+    settings_ = AppSettings::loadFromPath(newSettings.settingsPath);
+    wakeWordAvailable_ = true;
+    trayStatusOverride_.clear();
+    overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
+    overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+    refreshVadRuntimeStatus();
+    updateOverlayVadControl();
+    qInfo().noquote() << "preferences updated from" << settings_.settingsPath;
+    return true;
+}
+
 bool SpeakToComputerApp::maybeOfferModelFallback(const QString &message)
 {
     if (!message.contains(QStringLiteral("failed to initialize whisper context"), Qt::CaseInsensitive)) {
@@ -716,6 +794,8 @@ void SpeakToComputerApp::setupTrayIcon()
 
     trayStatusAction_ = trayMenu_.addAction(trayStatusText());
     trayStatusAction_->setEnabled(false);
+    trayPreferencesAction_ = trayMenu_.addAction(QStringLiteral("Preferences"));
+    connect(trayPreferencesAction_, &QAction::triggered, this, &SpeakToComputerApp::showPreferences);
     trayWakeWordAction_ = trayMenu_.addAction(QStringLiteral("Wake Word Listening"));
     trayWakeWordAction_->setCheckable(true);
     trayWakeWordAction_->setChecked(settings_.wakeWordEnabled);

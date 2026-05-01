@@ -29,6 +29,7 @@ struct AppSettings {
     static QString expandUserPath(const QString &path);
     static QString modelLabel(const QString &modelPath);
     static QStringList existingModelPaths(const QString &currentModelPath);
+    static bool save(const AppSettings &settings, QString *errorMessage);
     static bool saveModel(const QString &settingsPath, const QString &modelPath, QString *errorMessage);
     static bool saveWakeWordEnabled(const QString &settingsPath, bool enabled, QString *errorMessage);
     static bool saveVadAutostopEnabled(const QString &settingsPath, bool enabled, QString *errorMessage);

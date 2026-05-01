@@ -211,6 +211,78 @@ QStringList AppSettings::existingModelPaths(const QString &currentModelPath)
     return modelPaths;
 }
 
+bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
+{
+    if (settingsData.settingsPath.trimmed().isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Settings path is empty.");
+        }
+        return false;
+    }
+    if (settingsData.wakeWordThreshold <= 0.0 || settingsData.wakeWordThreshold > 1.0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Wake-word threshold must be between 0 and 1.");
+        }
+        return false;
+    }
+    if (settingsData.vadAggressiveness < 0 || settingsData.vadAggressiveness > 3) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("VAD aggressiveness must be between 0 and 3.");
+        }
+        return false;
+    }
+    if (settingsData.vadEndSilenceMs <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("VAD auto-stop silence must be positive.");
+        }
+        return false;
+    }
+    if (settingsData.vadMinSpeechMs <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("VAD minimum speech must be positive.");
+        }
+        return false;
+    }
+    if (settingsData.threads <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Thread count must be positive.");
+        }
+        return false;
+    }
+
+    QDir().mkpath(QFileInfo(settingsData.settingsPath).absolutePath());
+    QSettings settings(settingsData.settingsPath, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("hotkey_dictate"), settingsData.hotkeyDictate.trimmed());
+    settings.setValue(QStringLiteral("hotkey_translate_en"), settingsData.hotkeyTranslateEn.trimmed());
+    settings.setValue(QStringLiteral("audio_backend"), settingsData.audioBackend.trimmed());
+    settings.setValue(QStringLiteral("language"), settingsData.language.trimmed());
+    settings.setValue(QStringLiteral("threads"), settingsData.threads);
+    settings.setValue(QStringLiteral("whisper_cli"), settingsData.whisperCli.trimmed());
+    settings.setValue(QStringLiteral("model"), settingsData.model.trimmed());
+    settings.setValue(QStringLiteral("activation_sound"), settingsData.activationSound.trimmed());
+    settings.setValue(QStringLiteral("end_sound"), settingsData.endSound.trimmed());
+    settings.setValue(QStringLiteral("wake_word_enabled"), settingsData.wakeWordEnabled);
+    settings.setValue(QStringLiteral("wake_word_phrase"), settingsData.wakeWordPhrase.trimmed());
+    settings.setValue(QStringLiteral("wake_word_model_path"), settingsData.wakeWordModelPath.trimmed());
+    settings.setValue(QStringLiteral("wake_word_threshold"), settingsData.wakeWordThreshold);
+    settings.setValue(QStringLiteral("wake_word_sidecar_executable"), settingsData.wakeWordSidecarExecutable.trimmed());
+    settings.setValue(QStringLiteral("wake_word_sidecar_script"), settingsData.wakeWordSidecarScript.trimmed());
+    settings.setValue(QStringLiteral("vad_autostop_enabled"), settingsData.vadAutostopEnabled);
+    settings.setValue(QStringLiteral("vad_aggressiveness"), settingsData.vadAggressiveness);
+    settings.setValue(QStringLiteral("vad_end_silence_ms"), settingsData.vadEndSilenceMs);
+    settings.setValue(QStringLiteral("vad_min_speech_ms"), settingsData.vadMinSpeechMs);
+    settings.sync();
+
+    if (settings.status() == QSettings::NoError) {
+        return true;
+    }
+
+    if (errorMessage != nullptr) {
+        *errorMessage = QStringLiteral("Failed to save settings: %1").arg(settingsData.settingsPath);
+    }
+    return false;
+}
+
 bool AppSettings::saveModel(const QString &settingsPath, const QString &modelPath, QString *errorMessage)
 {
     QSettings settings(settingsPath, QSettings::IniFormat);

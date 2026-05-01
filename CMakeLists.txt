@@ -19,6 +19,8 @@ add_executable(speak-to-computer
     src/ClipboardPaster.h
     src/OverlayWidget.cpp
     src/OverlayWidget.h
+    src/PreferencesDialog.cpp
+    src/PreferencesDialog.h
     src/VadEndpointDetector.cpp
     src/VadEndpointDetector.h
     src/WebRtcVad.cpp
