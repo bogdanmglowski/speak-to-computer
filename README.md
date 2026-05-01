@@ -1,5 +1,49 @@
 # speak-to-computer
 
+## Index
+
+- [Description](#description)
+- [Future ideas](#future-ideas)
+- [Requirements](#requirements)
+  - [Current defaults](#current-defaults)
+- [Install whisper.cpp](#install-whispercpp)
+  - [Clone to home directory](#clone-to-home-directory)
+  - [Build CPU release binary](#build-cpu-release-binary)
+  - [Build for NVIDIA GPU](#build-for-nvidia-gpu)
+  - [Download default model](#download-default-model)
+  - [Verify `whisper-cli`](#verify-whisper-cli)
+- [Build app](#build-app)
+- [Rebuild after code changes](#rebuild-after-code-changes)
+- [Run](#run)
+  - [Run with logs](#run-with-logs)
+  - [Hotkeys and recording flow](#hotkeys-and-recording-flow)
+  - [Tray menu](#tray-menu)
+- [Install autostart](#install-autostart)
+  - [Installed binary and sounds](#installed-binary-and-sounds)
+  - [Installed wake-word runtime files](#installed-wake-word-runtime-files)
+  - [Installed desktop files and icon](#installed-desktop-files-and-icon)
+  - [Start after install](#start-after-install)
+- [Settings](#settings)
+  - [Settings file location](#settings-file-location)
+  - [Supported settings](#supported-settings)
+  - [Language mode](#language-mode)
+  - [Hotkey behavior](#hotkey-behavior)
+  - [Audio backend selection](#audio-backend-selection)
+  - [VAD auto-stop behavior](#vad-auto-stop-behavior)
+  - [VAD auto-stop runtime (`libfvad`)](#vad-auto-stop-runtime-libfvad)
+    - [Try package manager install](#try-package-manager-install)
+    - [Build `libfvad` from source](#build-libfvad-from-source)
+    - [Verify `libfvad` installation](#verify-libfvad-installation)
+    - [Recommended VAD settings](#recommended-vad-settings)
+- [Wake Word (optional)](#wake-word-optional)
+  - [Install wake-word runtime](#install-wake-word-runtime)
+  - [Python version note](#python-version-note)
+  - [`uv` option on Ubuntu or Pop!_OS](#uv-option-on-ubuntu-or-pop_os)
+  - [Enable wake word in settings](#enable-wake-word-in-settings)
+  - [Default sidecar paths](#default-sidecar-paths)
+  - [Custom wake-word model](#custom-wake-word-model)
+  - [Wake-word tray control](#wake-word-tray-control)
+
 ## Description
 
 This is a small speech-to-text application.
@@ -18,6 +62,7 @@ This is not a production-ready project, but it turned out to be somewhat useful,
 
 Things I’d like to experiment with next:
 - add TLDR fast install instructions to the README
+- split the text into paragraphs
 - add dictionary of special words
 
 
@@ -36,6 +81,8 @@ Things I’d like to experiment with next:
 
 The current defaults:
 
+### Current defaults
+
 ```bash
 ~/whisper.cpp/build/bin/whisper-cli
 ~/whisper.cpp/models/ggml-small.bin
@@ -51,13 +98,13 @@ I strongly recommend checking it out.
 checkout under `~/whisper.cpp` so the app defaults work
 without extra configuration.
 
-#### Clone it to your Home dir:
+### Clone to home directory
 
 ```bash
 git clone https://github.com/ggml-org/whisper.cpp.git
 ```
 
-#### Build a fast CPU-local release binary:
+### Build CPU release binary
 
 ```bash
 cd ~/whisper.cpp
@@ -84,8 +131,9 @@ older or different CPUs than the build machine.
 Consider using `-DGGML_CUDA=1` or `-DGGML_VULKAN=1` for GPU builds.
 For more information, see the https://github.com/ggml-org/whisper.cpp
 
-#### Building for NVIDIA GPU (Recommended for faster transcription)
+### Build for NVIDIA GPU
 
+(Recommended for faster transcription)
 If you have an NVIDIA GPU, building with CUDA support provides significantly faster transcription performance compared to CPU-only builds. GPU acceleration can reduce transcription time by 3-10x depending on your hardware.
 
 **Prerequisites:**
@@ -146,14 +194,14 @@ The build will automatically detect your GPU architecture. Verify CUDA is workin
 nvidia-smi  # Should show your GPU
 ```
 
-#### Download the default multilingual `small` model:
+### Download default model
 
 ```bash
 cd ~/whisper.cpp
 sh ./models/download-ggml-model.sh small
 ```
 
-#### Verify `whisper-cli` directly:
+### Verify `whisper-cli`
 
 ```bash
 cd ~/whisper.cpp
@@ -202,6 +250,8 @@ cd $APP_LOCATION/speak-to-computer
 ./build-speak-to-computer/speak-to-computer
 ```
 
+### Run with logs
+
 To keep logs in the terminal while testing:
 
 ```bash
@@ -209,12 +259,16 @@ cd $APP_LOCATION/speak-to-computer
 QT_LOGGING_RULES='*.info=true' ./build-speak-to-computer/speak-to-computer
 ```
 
+### Hotkeys and recording flow
+
 Press `Super+Space` to start recording original-language dictation, or
 `Super+Shift+Space` to start recording text that should be translated to
 English. Press the same hotkey again to stop recording, transcribe, and paste
 the text into the window that was active when recording started. While
 recording, pressing the other hotkey stops the recording and uses that output
 instead.
+
+### Tray menu
 
 The app runs in the background and exposes a system tray icon. Right-click the
 tray icon and choose `Quit` to stop it. Tray toggles:
@@ -233,6 +287,8 @@ cd $APP_LOCATION/speak-to-computer
 The installer also tries to install `libfvad` (VAD runtime dependency) using
 your system package manager when available.
 
+### Installed binary and sounds
+
 The install script copies the freshly built binary and default notification sounds to:
 
 ```bash
@@ -240,6 +296,8 @@ The install script copies the freshly built binary and default notification soun
 ~/.local/bin/activation_sound.wav
 ~/.local/bin/end_sound.wav
 ```
+
+### Installed wake-word runtime files
 
 Wake-word runtime files are copied to:
 
@@ -250,6 +308,8 @@ Wake-word runtime files are copied to:
 ~/.local/share/speak-to-computer/python/openwakeword/smoke_test.py
 ```
 
+### Installed desktop files and icon
+
 It also writes:
 
 ```bash
@@ -257,6 +317,8 @@ It also writes:
 ~/.config/autostart/speak-to-computer.desktop
 ~/.local/share/icons/hicolor/scalable/apps/speak-to-computer.svg
 ```
+
+### Start after install
 
 The script does not start or restart the app. Run it once manually after install,
 or let it start on your next login:
@@ -267,11 +329,15 @@ or let it start on your next login:
 
 ## Settings
 
+### Settings file location
+
 The first run writes defaults to:
 
 ```bash
 ~/.config/speak-to-computer/settings.ini
 ```
+
+### Supported settings
 
 Supported settings:
 
@@ -297,12 +363,18 @@ vad_end_silence_ms=900
 vad_min_speech_ms=250
 ```
 
+### Language mode
+
 Set `language=auto` to let Whisper detect the spoken language. Use `language=en`
 for English-only dictation.
+
+### Hotkey behavior
 
 Use `hotkey_dictate` for original-language dictation and
 `hotkey_translate_en` for translation to English. The output mode is chosen by
 the hotkey used for the current recording, not stored as a persistent setting.
+
+### Audio backend selection
 
 `audio_backend=auto` picks the first available recorder in this order:
 `pw-record`, `parec`, `parecord`, then `arecord`. You can force a backend with
@@ -310,6 +382,8 @@ the hotkey used for the current recording, not stored as a persistent setting.
 Systems using `pavucontrol` usually have a PulseAudio-compatible server, so
 `audio_backend=pulseaudio` should work with either classic PulseAudio or
 PipeWire's PulseAudio compatibility layer.
+
+### VAD auto-stop behavior
 
 `vad_autostop_enabled=true` auto-stops recording only after speech is detected
 and then trailing silence reaches `vad_end_silence_ms`. Silence without speech
@@ -324,12 +398,16 @@ The autostart installer (`./scripts/install-autostart.sh`) tries to install it
 automatically, but some distributions do not provide `libfvad` in their
 repositories (for example Pop!_OS 24.04 / Ubuntu 24.04).
 
+#### Try package manager install
+
 Try package manager install first:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y libfvad-dev
 ```
+
+#### Build `libfvad` from source
 
 If package installation fails (`Unable to locate package libfvad`), build it
 from source:
@@ -347,6 +425,8 @@ sudo make install
 sudo ldconfig
 ```
 
+#### Verify `libfvad` installation
+
 Verify installation:
 
 ```bash
@@ -355,6 +435,8 @@ ldconfig -p | grep -i fvad
 
 Expected output should include `libfvad.so` and `libfvad.so.0` (for example
 from `/usr/local/lib`).
+
+#### Recommended VAD settings
 
 After installation, restart the app. If needed, tune settings in
 `~/.config/speak-to-computer/settings.ini`:
@@ -371,6 +453,8 @@ vad_end_silence_ms=700
 Wake-word detection is optional and uses `openwakeword` through a local Python
 sidecar. It does not send microphone data to cloud services.
 
+### Install wake-word runtime
+
 Install wake-word runtime (creates dedicated venv and installs dependencies):
 
 ```bash
@@ -380,11 +464,15 @@ The installer also downloads required openWakeWord models (including `alexa`).
 For current `openwakeword==0.6.0` Linux runtime, the installer pins `numpy<2`
 to stay compatible with `tflite-runtime`.
 
+### Python version note
+
 If your default `python3` is 3.12+, install Python 3.11 (or 3.10) and run:
 
 ```bash
 PYTHON_BIN=python3.11 ~/.local/share/speak-to-computer/python/install-openwakeword-runtime.sh
 ```
+
+### `uv` option on Ubuntu or Pop!_OS
 
 On Pop!_OS 24.04 / Ubuntu 24.04, a simple option is `uv`:
 
@@ -393,6 +481,8 @@ uv python install 3.11
 ~/.local/share/speak-to-computer/python/install-openwakeword-runtime.sh
 ```
 
+### Enable wake word in settings
+
 Enable wake-word listening in `settings.ini`:
 
 ```ini
@@ -400,14 +490,20 @@ wake_word_enabled=true
 wake_word_phrase=alexa
 ```
 
+### Default sidecar paths
+
 With the defaults above, the sidecar uses:
 
 - `~/.local/share/speak-to-computer/python/.venv/bin/python`
 - `~/.local/share/speak-to-computer/python/openwakeword_sidecar.py`
 
+### Custom wake-word model
+
 The sidecar auto-resolves the bundled Alexa model from the installed
 `openwakeword` package. You only need `wake_word_model_path` if you want to
 override with a custom ONNX/TFLite model.
+
+### Wake-word tray control
 
 You can also enable/disable wake-word listening at runtime from the tray menu
 (`Wake Word Listening`). After detection, the app starts the same recording
