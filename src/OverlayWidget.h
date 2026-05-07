@@ -7,6 +7,8 @@
 
 class QMouseEvent;
 class QPlainTextEdit;
+class QHideEvent;
+class QKeyEvent;
 class QResizeEvent;
 class QRectF;
 
@@ -29,16 +31,20 @@ public:
     void setAvailableModelPaths(const QStringList &modelPaths);
     void setVadAutostopPreset(bool enabled, int endSilenceMs);
     void setVadControlAvailable(bool available);
+    bool isRecordingMode() const;
 
 signals:
     void modelSelected(const QString &modelPath);
     void vadPresetSelected(bool enabled, int endSilenceMs);
     void closeRequested();
+    void visibilityChanged(bool visible);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void showEvent(QShowEvent *event) override;
 

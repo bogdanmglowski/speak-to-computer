@@ -89,6 +89,8 @@ if(BUILD_TESTING)
         src/AppSettings.h
         src/AudioRecorder.cpp
         src/AudioRecorder.h
+        src/OverlayWidget.cpp
+        src/OverlayWidget.h
         src/TranscriptCleaner.cpp
         src/TranscriptCleaner.h
         src/VadEndpointDetector.cpp
@@ -103,7 +105,7 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(speak-to-computer-tests PRIVATE src)
-    target_link_libraries(speak-to-computer-tests PRIVATE Qt6::Core Qt6::Test)
+    target_link_libraries(speak-to-computer-tests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 
     add_test(NAME speak-to-computer-core COMMAND speak-to-computer-tests)
 endif()

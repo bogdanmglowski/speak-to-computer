@@ -35,6 +35,8 @@ bool parseHotkey(const QString &hotkey, unsigned int *modifiers, KeySym *keySymb
             parsedModifiers |= ShiftMask;
         } else if (lower == QStringLiteral("space")) {
             parsedKey = XK_space;
+        } else if (lower == QStringLiteral("esc") || lower == QStringLiteral("escape")) {
+            parsedKey = XK_Escape;
         } else {
             parsedKey = XStringToKeysym(lower.toLatin1().constData());
             if (parsedKey == NoSymbol && token.size() == 1) {

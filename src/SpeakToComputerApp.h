@@ -72,6 +72,7 @@ private:
     QString nextWavPath() const;
     QString trayStatusText() const;
     void setupTrayIcon();
+    void setOverlayCloseHotkeyEnabled(bool enabled);
     void updateTrayStatus();
     void updateOverlayVadControl();
     void configureVadForCurrentRecording();
@@ -84,6 +85,7 @@ private:
     AppSettings settings_;
     X11Hotkey dictateHotkey_;
     X11Hotkey translateHotkey_;
+    X11Hotkey overlayCloseHotkey_;
     OverlayWidget overlay_;
     AudioRecorder recorder_;
     WhisperRunner whisper_;
@@ -110,4 +112,5 @@ private:
     bool vadRuntimeAvailable_ = true;
     QString vadRuntimeError_;
     bool recordingStopRequested_ = false;
+    bool overlayCloseHotkeyEnabled_ = false;
 };

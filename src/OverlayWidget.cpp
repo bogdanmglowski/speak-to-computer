@@ -7,6 +7,8 @@
 #include <QFontMetrics>
 #include <QFrame>
 #include <QGuiApplication>
+#include <QHideEvent>
+#include <QKeyEvent>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -247,6 +249,11 @@ void OverlayWidget::setVadControlAvailable(bool available)
     }
 }
 
+bool OverlayWidget::isRecordingMode() const
+{
+    return mode_ == Mode::Recording;
+}
+
 void OverlayWidget::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event)
@@ -402,6 +409,17 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     painter.drawText(QRectF(bar.right() + 12, bar.top() - 6, 50, 18), Qt::AlignLeft, elapsedText());
 }
 
+void OverlayWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Escape) {
+        event->accept();
+        emit closeRequested();
+        return;
+    }
+
+    QWidget::keyPressEvent(event);
+}
+
 void OverlayWidget::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton) {
@@ -473,6 +491,12 @@ void OverlayWidget::mouseMoveEvent(QMouseEvent *event)
     }
 }
 
+void OverlayWidget::hideEvent(QHideEvent *event)
+{
+    QWidget::hideEvent(event);
+    emit visibilityChanged(false);
+}
+
 void OverlayWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
@@ -483,6 +507,7 @@ void OverlayWidget::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
     placeOnPrimaryScreen();
+    emit visibilityChanged(true);
 }
 
 void OverlayWidget::updateWindowSize()

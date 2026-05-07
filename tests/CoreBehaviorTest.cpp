@@ -1,12 +1,15 @@
 #include "AppSettings.h"
 #include "AudioRecorder.h"
+#include "OverlayWidget.h"
 #include "TranscriptCleaner.h"
 #include "VadEndpointDetector.h"
 #include "WavWriter.h"
 #include "WhisperRunner.h"
 
+#include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QKeyEvent>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -37,6 +40,7 @@ private slots:
     void settingsShouldMigrateLegacyConfigWithoutVadKeys();
     void settingsShouldMigrateLegacyWakeWordRuntimeDefaults();
     void settingsShouldMigrateAppDataWakeWordRuntimeDefaults();
+    void overlayShouldRequestCloseOnEscape();
     void cleanupShouldTrimAndJoinTranscriptLines();
     void cleanupShouldDropWhisperNonSpeechAnnotations();
     void whisperRunnerShouldPassTranslateFlagWhenEnabled();
@@ -480,6 +484,17 @@ void CoreBehaviorTest::settingsShouldMigrateAppDataWakeWordRuntimeDefaults()
     QVERIFY(!settings.wakeWordSidecarScript.contains(QStringLiteral("/speak-to-computer/speak-to-computer/python")));
 }
 
+void CoreBehaviorTest::overlayShouldRequestCloseOnEscape()
+{
+    OverlayWidget overlay;
+    QSignalSpy closeSpy(&overlay, &OverlayWidget::closeRequested);
+
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QVERIFY(QCoreApplication::sendEvent(&overlay, &event));
+
+    QCOMPARE(closeSpy.count(), 1);
+}
+
 void CoreBehaviorTest::cleanupShouldTrimAndJoinTranscriptLines()
 {
     const QString raw = QStringLiteral("  To jest test.  \n\n  Druga linia. \r\n");
@@ -749,6 +764,15 @@ void CoreBehaviorTest::vadEndpointShouldIgnoreShortSpeechBursts()
     QVERIFY(!detector.shouldAutoStop());
 }
 
-QTEST_MAIN(CoreBehaviorTest)
+int main(int argc, char **argv)
+{
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
+    }
+
+    QApplication app(argc, argv);
+    CoreBehaviorTest test;
+    return QTest::qExec(&test, argc, argv);
+}
 
 #include "CoreBehaviorTest.moc"
