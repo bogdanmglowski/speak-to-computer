@@ -87,6 +87,7 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&translateHotkey_, &X11Hotkey::activated, this, [this]() {
         handleHotkey(OutputMode::English, translateHotkey_);
     });
+    connect(&overlayCloseHotkey_, &X11Hotkey::activated, this, &SpeakToComputerApp::cancelRecording);
     connect(&recorder_, &AudioRecorder::levelChanged, &overlay_, &OverlayWidget::setAudioLevel);
     connect(&recorder_, &AudioRecorder::audioChunkCaptured, this, [this](const QByteArray &chunk) {
         if (state_ != State::Recording || !vadEnabledForCurrentRecording_ || recordingStopRequested_) {
@@ -115,6 +116,8 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&wakeWordListener_, &WakeWordListener::failed, this, &SpeakToComputerApp::handleWakeWordFailure);
     connect(&overlay_, &OverlayWidget::modelSelected, this, &SpeakToComputerApp::handleModelSelected);
     connect(&overlay_, &OverlayWidget::vadPresetSelected, this, &SpeakToComputerApp::handleVadPresetSelected);
+    connect(&overlay_, &OverlayWidget::closeRequested, this, &SpeakToComputerApp::cancelRecording);
+    connect(&overlay_, &OverlayWidget::visibilityChanged, this, &SpeakToComputerApp::setOverlayCloseHotkeyEnabled);
     connect(&elapsedTimer_, &QTimer::timeout, this, [this]() {
         overlay_.setElapsedMs(recordingClock_.elapsed());
     });
@@ -256,6 +259,31 @@ void SpeakToComputerApp::stopRecording(OutputMode outputMode)
     AppSettings transcriptionSettings = settings_;
     transcriptionSettings.translateToEn = currentOutputMode_ == OutputMode::English;
     whisper_.transcribe(currentWavPath_, transcriptionSettings);
+}
+
+void SpeakToComputerApp::cancelRecording()
+{
+    if (state_ != State::Recording) {
+        overlay_.hide();
+        return;
+    }
+
+    recordingStopRequested_ = true;
+    vadEnabledForCurrentRecording_ = false;
+    vadEndpointDetector_.clear();
+    elapsedTimer_.stop();
+
+    QString errorMessage;
+    recorder_.stop(&errorMessage);
+    playEndSound();
+    removeCurrentWav();
+
+    state_ = State::Idle;
+    trayStatusOverride_.clear();
+    updateWakeWordListening();
+    updateTrayStatus();
+    overlay_.hide();
+    qInfo().noquote() << "recording cancelled";
 }
 
 void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
@@ -816,6 +844,28 @@ void SpeakToComputerApp::setupTrayIcon()
         qWarning() << "No system tray is currently available.";
     }
     updateTrayStatus();
+}
+
+void SpeakToComputerApp::setOverlayCloseHotkeyEnabled(bool enabled)
+{
+    if (overlayCloseHotkeyEnabled_ == enabled) {
+        return;
+    }
+
+    if (!enabled) {
+        overlayCloseHotkey_.unregisterHotkey();
+        overlayCloseHotkeyEnabled_ = false;
+        return;
+    }
+
+    QString errorMessage;
+    // The overlay intentionally does not take focus, so Esc must be grabbed globally while it is visible.
+    if (!overlayCloseHotkey_.registerHotkey(QStringLiteral("Escape"), &errorMessage)) {
+        qWarning().noquote() << "Could not register overlay close hotkey Escape:" << errorMessage;
+        return;
+    }
+
+    overlayCloseHotkeyEnabled_ = true;
 }
 
 void SpeakToComputerApp::updateTrayStatus()

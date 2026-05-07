@@ -7,6 +7,8 @@
 #include <QFontMetrics>
 #include <QFrame>
 #include <QGuiApplication>
+#include <QHideEvent>
+#include <QKeyEvent>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -42,6 +44,8 @@ constexpr int modelChipRightPadding = 14;
 constexpr int modelChipHorizontalPadding = 11;
 constexpr int modelChipArrowWidth = 10;
 constexpr int modelChipGapToTitle = 12;
+constexpr int closeButtonWidth = 24;
+constexpr int closeButtonGap = 6;
 constexpr int vadChipHeight = 28;
 constexpr int vadChipHorizontalPadding = 11;
 constexpr int vadChipArrowWidth = 10;
@@ -67,6 +71,7 @@ OverlayWidget::OverlayWidget(QWidget *parent)
     setAttribute(Qt::WA_ShowWithoutActivating, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setFocusPolicy(Qt::NoFocus);
+    setMouseTracking(true);
 
     errorText_ = new QPlainTextEdit(this);
     QFont bodyFont = font();
@@ -244,6 +249,11 @@ void OverlayWidget::setVadControlAvailable(bool available)
     }
 }
 
+bool OverlayWidget::isRecordingMode() const
+{
+    return mode_ == Mode::Recording;
+}
+
 void OverlayWidget::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event)
@@ -309,6 +319,18 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(220, 224, 232, modelControlEnabled_ ? 235 : 145));
     painter.drawPolygon(arrow);
+
+    const QRectF closeRect = closeButtonRect(card);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(229, 70, 78));
+    painter.drawRoundedRect(closeRect, 6, 6);
+
+    painter.setPen(QPen(QColor(245, 247, 250), 2));
+    const qreal closePad = 6;
+    painter.drawLine(QPointF(closeRect.left() + closePad, closeRect.top() + closePad),
+            QPointF(closeRect.right() - closePad, closeRect.bottom() - closePad));
+    painter.drawLine(QPointF(closeRect.right() - closePad, closeRect.top() + closePad),
+            QPointF(closeRect.left() + closePad, closeRect.bottom() - closePad));
 
     if (mode_ == Mode::Error) {
         return;
@@ -387,14 +409,37 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     painter.drawText(QRectF(bar.right() + 12, bar.top() - 6, 50, 18), Qt::AlignLeft, elapsedText());
 }
 
+void OverlayWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Escape) {
+        event->accept();
+        emit closeRequested();
+        return;
+    }
+
+    QWidget::keyPressEvent(event);
+}
+
 void OverlayWidget::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() != Qt::LeftButton || mode_ == Mode::Error) {
+    if (event->button() != Qt::LeftButton) {
         QWidget::mousePressEvent(event);
         return;
     }
 
     const QRectF card = rect().adjusted(8, 8, -8, -8);
+    const QRectF closeRect = closeButtonRect(card);
+    if (closeRect.contains(event->position())) {
+        event->accept();
+        emit closeRequested();
+        return;
+    }
+
+    if (mode_ == Mode::Error) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+
     const QRectF modelRect = modelChipRect(card);
     if (modelRect.contains(event->position())) {
         event->accept();
@@ -426,6 +471,32 @@ void OverlayWidget::mousePressEvent(QMouseEvent *event)
     QWidget::mousePressEvent(event);
 }
 
+void OverlayWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    const QRectF card = rect().adjusted(8, 8, -8, -8);
+    const QRectF closeRect = closeButtonRect(card);
+    const QRectF modelRect = modelChipRect(card);
+
+    const bool overClose = closeRect.contains(event->position());
+    const bool overModel = modelRect.contains(event->position()) && modelControlEnabled_
+            && mode_ != Mode::Error;
+    const bool overVad = mode_ == Mode::Recording
+            && vadControlAvailable_
+            && vadChipRect(card).contains(event->position());
+
+    if (overClose || overModel || overVad) {
+        setCursor(Qt::PointingHandCursor);
+    } else {
+        unsetCursor();
+    }
+}
+
+void OverlayWidget::hideEvent(QHideEvent *event)
+{
+    QWidget::hideEvent(event);
+    emit visibilityChanged(false);
+}
+
 void OverlayWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
@@ -436,6 +507,7 @@ void OverlayWidget::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
     placeOnPrimaryScreen();
+    emit visibilityChanged(true);
 }
 
 void OverlayWidget::updateWindowSize()
@@ -521,9 +593,16 @@ QRectF OverlayWidget::modelChipRect(const QRectF &card) const
             textWidth + modelChipHorizontalPadding * 2 + modelChipArrowWidth + 8,
             84,
             172);
-    const qreal chipX = card.right() - modelChipRightPadding - chipWidth;
+    const qreal chipX = card.right() - modelChipRightPadding - closeButtonWidth - closeButtonGap - chipWidth;
     const qreal chipY = card.top() + modelChipTop;
     return QRectF(chipX, chipY, chipWidth, modelChipHeight);
+}
+
+QRectF OverlayWidget::closeButtonRect(const QRectF &card) const
+{
+    const qreal x = card.right() - modelChipRightPadding - closeButtonWidth;
+    const qreal y = card.top() + modelChipTop + (modelChipHeight - closeButtonWidth) / 2.0;
+    return QRectF(x, y, closeButtonWidth, closeButtonWidth);
 }
 
 QRectF OverlayWidget::vadChipRect(const QRectF &card) const
