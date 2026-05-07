@@ -33,10 +33,12 @@ public:
 signals:
     void modelSelected(const QString &modelPath);
     void vadPresetSelected(bool enabled, int endSilenceMs);
+    void closeRequested();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
@@ -55,6 +57,7 @@ private:
     void placeOnPrimaryScreen();
     QString elapsedText() const;
     QRectF modelChipRect(const QRectF &card) const;
+    QRectF closeButtonRect(const QRectF &card) const;
     QRectF vadChipRect(const QRectF &card) const;
     QString vadChipLabel() const;
     void showModelMenu(const QPoint &globalPos);

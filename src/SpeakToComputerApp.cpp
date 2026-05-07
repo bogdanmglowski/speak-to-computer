@@ -115,6 +115,7 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&wakeWordListener_, &WakeWordListener::failed, this, &SpeakToComputerApp::handleWakeWordFailure);
     connect(&overlay_, &OverlayWidget::modelSelected, this, &SpeakToComputerApp::handleModelSelected);
     connect(&overlay_, &OverlayWidget::vadPresetSelected, this, &SpeakToComputerApp::handleVadPresetSelected);
+    connect(&overlay_, &OverlayWidget::closeRequested, this, &SpeakToComputerApp::cancelRecording);
     connect(&elapsedTimer_, &QTimer::timeout, this, [this]() {
         overlay_.setElapsedMs(recordingClock_.elapsed());
     });
@@ -256,6 +257,31 @@ void SpeakToComputerApp::stopRecording(OutputMode outputMode)
     AppSettings transcriptionSettings = settings_;
     transcriptionSettings.translateToEn = currentOutputMode_ == OutputMode::English;
     whisper_.transcribe(currentWavPath_, transcriptionSettings);
+}
+
+void SpeakToComputerApp::cancelRecording()
+{
+    if (state_ != State::Recording) {
+        overlay_.hide();
+        return;
+    }
+
+    recordingStopRequested_ = true;
+    vadEnabledForCurrentRecording_ = false;
+    vadEndpointDetector_.clear();
+    elapsedTimer_.stop();
+
+    QString errorMessage;
+    recorder_.stop(&errorMessage);
+    playEndSound();
+    removeCurrentWav();
+
+    state_ = State::Idle;
+    trayStatusOverride_.clear();
+    updateWakeWordListening();
+    updateTrayStatus();
+    overlay_.hide();
+    qInfo().noquote() << "recording cancelled";
 }
 
 void SpeakToComputerApp::handleTranscriptionReady(const QString &text)

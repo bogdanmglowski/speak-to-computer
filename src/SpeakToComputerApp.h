@@ -54,6 +54,7 @@ private:
     void handleHotkey(OutputMode outputMode, const X11Hotkey &sourceHotkey);
     void startRecording(OutputMode outputMode, quint64 targetWindow);
     void stopRecording(OutputMode outputMode);
+    void cancelRecording();
     void updateWakeWordListening();
     void stopWakeWordListening();
     void showWakeWordListeningStatus();
