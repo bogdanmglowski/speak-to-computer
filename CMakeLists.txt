@@ -17,6 +17,8 @@ add_executable(speak-to-computer
     src/AudioRecorder.h
     src/ClipboardPaster.cpp
     src/ClipboardPaster.h
+    src/FileHandoff.cpp
+    src/FileHandoff.h
     src/OverlayWidget.cpp
     src/OverlayWidget.h
     src/PreferencesDialog.cpp
@@ -89,6 +91,8 @@ if(BUILD_TESTING)
         src/AppSettings.h
         src/AudioRecorder.cpp
         src/AudioRecorder.h
+        src/FileHandoff.cpp
+        src/FileHandoff.h
         src/OverlayWidget.cpp
         src/OverlayWidget.h
         src/TranscriptCleaner.cpp
