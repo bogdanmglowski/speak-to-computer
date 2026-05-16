@@ -37,4 +37,8 @@ private:
     QSpinBox *vadAggressivenessSpin_ = nullptr;
     QSpinBox *vadEndSilenceMsSpin_ = nullptr;
     QSpinBox *vadMinSpeechMsSpin_ = nullptr;
+    QGroupBox *outputGroup_ = nullptr;
+    QComboBox *outputTargetCombo_ = nullptr;
+    QLineEdit *handoffDirectoryEdit_ = nullptr;
+    QLineEdit *handoffTriggerWordsEdit_ = nullptr;
 };
