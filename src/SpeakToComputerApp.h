@@ -3,6 +3,7 @@
 #include "AppSettings.h"
 #include "AudioRecorder.h"
 #include "ClipboardPaster.h"
+#include "FileHandoff.h"
 #include "OverlayWidget.h"
 #include "VadEndpointDetector.h"
 #include "WakeWordListener.h"
@@ -51,6 +52,11 @@ private:
         English,
     };
 
+    enum class OutputTarget {
+        Clipboard,
+        HandoffFile,
+    };
+
     void handleHotkey(OutputMode outputMode, const X11Hotkey &sourceHotkey);
     void startRecording(OutputMode outputMode, quint64 targetWindow);
     void stopRecording(OutputMode outputMode);
@@ -90,6 +96,7 @@ private:
     AudioRecorder recorder_;
     WhisperRunner whisper_;
     ClipboardPaster paster_;
+    FileHandoff handoff_;
     QMenu trayMenu_;
     QSystemTrayIcon trayIcon_;
     QTimer elapsedTimer_;
