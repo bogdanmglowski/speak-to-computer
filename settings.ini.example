@@ -18,6 +18,9 @@ vad_autostop_enabled=false
 vad_aggressiveness=2
 vad_end_silence_ms=900
 vad_min_speech_ms=250
+output_target=clipboard
+handoff_directory=/tmp/agent
+handoff_trigger_words=
 
 # activation_sound - sound played when recording starts (before UI appears)
 #   - absolute path: /full/path/to/sound.wav
@@ -42,3 +45,6 @@ vad_min_speech_ms=250
 # vad_aggressiveness - WebRTC VAD mode (0..3), default 2
 # vad_end_silence_ms - required trailing silence after speech before auto-stop, default 900
 # vad_min_speech_ms - minimum continuous speech needed to arm auto-stop, default 250
+# output_target - where transcribed text goes: clipboard, handoff_file, or auto (trigger-word routing), default clipboard
+# handoff_directory - directory for timestamped .txt files, default /tmp/agent
+# handoff_trigger_words - comma-separated trigger words for auto mode (case-insensitive prefix match), e.g. agent,computer

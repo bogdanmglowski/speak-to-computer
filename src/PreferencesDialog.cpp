@@ -148,6 +148,29 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     vadGroup_->setLayout(vadLayout);
     sectionsLayout->addWidget(vadGroup_, 2, 0, 1, 2);
 
+    outputGroup_ = new QGroupBox(QStringLiteral("Output"), content);
+    auto *outputLayout = createFormLayout(outputGroup_);
+    outputTargetCombo_ = new QComboBox(outputGroup_);
+    outputTargetCombo_->addItems({
+            QStringLiteral("Clipboard"),
+            QStringLiteral("Handoff File"),
+            QStringLiteral("Auto"),
+    });
+    if (settings.outputTarget == QStringLiteral("handoff_file")) {
+        outputTargetCombo_->setCurrentIndex(1);
+    } else if (settings.outputTarget == QStringLiteral("auto")) {
+        outputTargetCombo_->setCurrentIndex(2);
+    }
+    handoffDirectoryEdit_ = new QLineEdit(settings.handoffDirectory, outputGroup_);
+    handoffDirectoryEdit_->setPlaceholderText(QStringLiteral("/tmp/agent"));
+    handoffTriggerWordsEdit_ = new QLineEdit(settings.handoffTriggerWords, outputGroup_);
+    handoffTriggerWordsEdit_->setPlaceholderText(QStringLiteral("agent, computer"));
+    outputLayout->addRow(QStringLiteral("Output target"), outputTargetCombo_);
+    outputLayout->addRow(QStringLiteral("Handoff directory"), handoffDirectoryEdit_);
+    outputLayout->addRow(QStringLiteral("Handoff trigger words"), handoffTriggerWordsEdit_);
+    outputGroup_->setLayout(outputLayout);
+    sectionsLayout->addWidget(outputGroup_, 3, 0, 1, 2);
+
     contentLayout->addStretch();
     scrollArea->setWidget(content);
 
@@ -179,5 +202,14 @@ AppSettings PreferencesDialog::editedSettings() const
     edited.vadEndSilenceMs = vadEndSilenceMsSpin_->value();
     edited.vadMinSpeechMs = vadMinSpeechMsSpin_->value();
     edited.threads = threadsSpin_->value();
+    edited.outputTarget = [&]() -> QString {
+        switch (outputTargetCombo_->currentIndex()) {
+        case 1: return QStringLiteral("handoff_file");
+        case 2: return QStringLiteral("auto");
+        default: return QStringLiteral("clipboard");
+        }
+    }();
+    edited.handoffDirectory = handoffDirectoryEdit_->text().trimmed();
+    edited.handoffTriggerWords = handoffTriggerWordsEdit_->text().trimmed();
     return edited;
 }

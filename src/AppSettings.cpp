@@ -135,6 +135,15 @@ void ensureDefaults(QSettings *settings)
     if (!settings->contains(QStringLiteral("vad_min_speech_ms"))) {
         settings->setValue(QStringLiteral("vad_min_speech_ms"), 250);
     }
+    if (!settings->contains(QStringLiteral("output_target"))) {
+        settings->setValue(QStringLiteral("output_target"), QStringLiteral("clipboard"));
+    }
+    if (!settings->contains(QStringLiteral("handoff_directory"))) {
+        settings->setValue(QStringLiteral("handoff_directory"), QStringLiteral("/tmp/agent"));
+    }
+    if (!settings->contains(QStringLiteral("handoff_trigger_words"))) {
+        settings->setValue(QStringLiteral("handoff_trigger_words"), QStringLiteral(""));
+    }
 
     const QString configuredSidecarExecutable =
             settings->value(QStringLiteral("wake_word_sidecar_executable")).toString().trimmed();
@@ -271,6 +280,9 @@ bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
     settings.setValue(QStringLiteral("vad_aggressiveness"), settingsData.vadAggressiveness);
     settings.setValue(QStringLiteral("vad_end_silence_ms"), settingsData.vadEndSilenceMs);
     settings.setValue(QStringLiteral("vad_min_speech_ms"), settingsData.vadMinSpeechMs);
+    settings.setValue(QStringLiteral("output_target"), settingsData.outputTarget.trimmed());
+    settings.setValue(QStringLiteral("handoff_directory"), settingsData.handoffDirectory.trimmed());
+    settings.setValue(QStringLiteral("handoff_trigger_words"), settingsData.handoffTriggerWords.trimmed());
     settings.sync();
 
     if (settings.status() == QSettings::NoError) {
@@ -384,6 +396,9 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     result.vadAggressiveness = settings.value(QStringLiteral("vad_aggressiveness")).toInt();
     result.vadEndSilenceMs = settings.value(QStringLiteral("vad_end_silence_ms")).toInt();
     result.vadMinSpeechMs = settings.value(QStringLiteral("vad_min_speech_ms")).toInt();
+    result.outputTarget = settings.value(QStringLiteral("output_target")).toString().trimmed();
+    result.handoffDirectory = settings.value(QStringLiteral("handoff_directory")).toString().trimmed();
+    result.handoffTriggerWords = settings.value(QStringLiteral("handoff_trigger_words")).toString().trimmed();
 
     if (result.wakeWordPhrase.isEmpty()) {
         result.wakeWordPhrase = defaultWakeWordPhrase();

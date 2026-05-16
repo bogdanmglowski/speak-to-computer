@@ -27,6 +27,7 @@
   - [Settings file location](#settings-file-location)
   - [Supported settings](#supported-settings)
   - [Language mode](#language-mode)
+  - [Output target (Handoff / Auto)](#output-target-handoff--auto)
   - [Hotkey behavior](#hotkey-behavior)
   - [Audio backend selection](#audio-backend-selection)
   - [VAD auto-stop behavior (optional)](#vad-auto-stop-behavior-optional)
@@ -271,9 +272,11 @@ QT_LOGGING_RULES='*.info=true' ./build-speak-to-computer/speak-to-computer
 
 Press `Super+Space` to start recording original-language dictation, or
 `Super+Shift+Space` to start recording text that should be translated to
-English. Press the same hotkey again to stop recording, transcribe, and paste
-the text into the window that was active when recording started. While
-recording, pressing the other hotkey stops the recording and uses that output
+English. Press the same hotkey again to stop recording, transcribe, and output
+the text according to the configured output target
+(see [Output target](#output-target-handoff--auto)). By default, text is pasted
+into the window that was active when recording started. While recording,
+pressing the other hotkey stops the recording and uses that output mode
 instead.
 
 ### Tray menu
@@ -372,12 +375,45 @@ vad_autostop_enabled=false
 vad_aggressiveness=2
 vad_end_silence_ms=900
 vad_min_speech_ms=250
+output_target=clipboard
+handoff_directory=/tmp/agent
+handoff_trigger_words=
 ```
 
 ### Language mode
 
 Set `language=auto` to let Whisper detect the spoken language. Use `language=en`
 for English-only dictation.
+
+### Output target (Handoff / Auto)
+
+`output_target` controls where transcribed text goes after recognition. Three
+modes are available:
+
+- **`clipboard`** (default) — pastes text into the active window via `xdotool`
+  (Ctrl+V). This is the classic behavior.
+
+- **`handoff_file`** — writes text to a timestamped `.txt` file in
+  `handoff_directory` (default `/tmp/agent`). Files are named
+  `handoff_yyyy-MM-dd_HH-mm-ss-zzz.txt`. Useful for feeding transcribed text
+  to other tools, scripts, or AI agents that watch a directory.
+
+- **`auto`** — hybrid mode. Checks if the transcribed text starts with one of the
+  comma-separated `handoff_trigger_words` (case-insensitive prefix match). If a
+  trigger word is found, the trigger word and following separators (comma, colon,
+  space, etc.) are stripped and the remaining text is written to the handoff
+  directory. If no trigger word matches, the text is pasted via clipboard.
+
+Example with `handoff_trigger_words=agent,computer`:
+
+| Spoken text                | Output target | Result                            |
+|----------------------------|---------------|-----------------------------------|
+| `Hello world`              | auto          | pasted (no trigger)               |
+| `Agent, write a script`    | auto          | `write a script` → written to file |
+| `computer, open browser`   | auto          | `open browser` → written to file  |
+
+Both `handoff_directory` and `handoff_trigger_words` are configurable in
+Preferences (`Output` section) or directly in `settings.ini`.
 
 ### Hotkey behavior
 

@@ -25,6 +25,9 @@ struct AppSettings {
     int vadMinSpeechMs = 250;
     int threads = 12;
     bool translateToEn = false;
+    QString outputTarget = QStringLiteral("clipboard");
+    QString handoffDirectory = QStringLiteral("/tmp/agent");
+    QString handoffTriggerWords;
 
     static QString expandUserPath(const QString &path);
     static QString modelLabel(const QString &modelPath);

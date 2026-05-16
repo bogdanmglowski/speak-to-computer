@@ -295,7 +295,50 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
         return;
     }
 
+    bool useHandoff = settings_.outputTarget == QStringLiteral("handoff_file");
+    QString handoffText = text;
+
+    if (settings_.outputTarget == QStringLiteral("auto")) {
+        const QString trimmed = text.trimmed();
+        const QStringList triggerWords = settings_.handoffTriggerWords.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        useHandoff = false;
+        for (const QString &word : triggerWords) {
+            const QString trimmedWord = word.trimmed();
+            if (trimmedWord.isEmpty()) {
+                continue;
+            }
+            if (!trimmed.startsWith(trimmedWord, Qt::CaseInsensitive)) {
+                continue;
+            }
+            QString afterTrigger = trimmed.mid(trimmedWord.length());
+            while (!afterTrigger.isEmpty() && QStringLiteral(" ,.:;!?-").contains(afterTrigger.at(0))) {
+                afterTrigger.remove(0, 1);
+            }
+            if (!afterTrigger.isEmpty()) {
+                useHandoff = true;
+                handoffText = afterTrigger;
+            }
+            break;
+        }
+    }
+
     QString errorMessage;
+    if (useHandoff) {
+        if (!handoff_.write(settings_.handoffDirectory, handoffText, &errorMessage)) {
+            showErrorAndReturnIdle(errorMessage);
+            return;
+        }
+        state_ = State::Idle;
+        trayStatusOverride_.clear();
+        overlay_.setModelControlEnabled(true);
+        overlay_.showDone(QStringLiteral("%1 text written to %2").arg(outputLabel(currentOutputMode_), settings_.handoffDirectory));
+        updateWakeWordListening();
+        updateTrayStatus();
+        qInfo() << "transcription handoff";
+        QTimer::singleShot(900, &overlay_, &OverlayWidget::hide);
+        return;
+    }
+
     if (!paster_.paste(targetWindow_, text, &errorMessage)) {
         showErrorAndReturnIdle(errorMessage);
         return;
