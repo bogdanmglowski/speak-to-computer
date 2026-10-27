@@ -198,6 +198,44 @@ bool X11Hotkey::registerHotkey(const QString &hotkey, QString *errorMessage)
     return true;
 }
 
+bool X11Hotkey::registerMouseButton(unsigned int button, QString *errorMessage)
+{
+    ungrab();
+    if (display_ == nullptr) {
+        display_ = XOpenDisplay(nullptr);
+        if (display_ == nullptr) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("Could not open the X11 display.");
+            }
+            return false;
+        }
+    }
+
+    rootWindow_ = DefaultRootWindow(display_);
+    mouseButton_ = button;
+    grabErrorCode = 0;
+    int (*previousHandler)(Display *, XErrorEvent *) = XSetErrorHandler(grabErrorHandler);
+    XGrabButton(display_, mouseButton_, AnyModifier, rootWindow_, False, ButtonPressMask | ButtonReleaseMask,
+            GrabModeAsync, GrabModeAsync, None, None);
+    XSync(display_, False);
+    XSetErrorHandler(previousHandler);
+    if (grabErrorCode != 0) {
+        ungrab();
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Could not register global mouse button %1.").arg(button);
+        }
+        return false;
+    }
+
+    if (notifier_ == nullptr) {
+        notifier_ = new QSocketNotifier(ConnectionNumber(display_), QSocketNotifier::Read, this);
+        connect(notifier_, &QSocketNotifier::activated, this, &X11Hotkey::drainEvents);
+    } else {
+        notifier_->setEnabled(true);
+    }
+    return true;
+}
+
 void X11Hotkey::unregisterHotkey()
 {
     ungrab();
@@ -235,14 +273,21 @@ void X11Hotkey::drainEvents()
         XNextEvent(display_, &event);
         if (event.type == KeyPress && matchesHotkey(event.xkey, keycode_, modifiers_)) {
             emit activated();
+        } else if (event.type == ButtonRelease && event.xbutton.button == mouseButton_) {
+            emit activated();
         }
     }
 }
 
 void X11Hotkey::ungrab()
 {
-    if (display_ == nullptr || keycode_ == 0 || rootWindow_ == 0) {
+    if (display_ == nullptr || rootWindow_ == 0) {
         return;
+    }
+
+    if (mouseButton_ != 0) {
+        XUngrabButton(display_, mouseButton_, AnyModifier, rootWindow_);
+        mouseButton_ = 0;
     }
 
     const unsigned int variants[] = {
@@ -252,7 +297,9 @@ void X11Hotkey::ungrab()
             LockMask | Mod2Mask,
     };
     for (unsigned int variant : variants) {
-        XUngrabKey(display_, static_cast<int>(keycode_), modifiers_ | variant, rootWindow_);
+        if (keycode_ != 0) {
+            XUngrabKey(display_, static_cast<int>(keycode_), modifiers_ | variant, rootWindow_);
+        }
     }
     XSync(display_, False);
     keycode_ = 0;

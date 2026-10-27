@@ -13,6 +13,7 @@ public:
     ~X11Hotkey() override;
 
     bool registerHotkey(const QString &hotkey, QString *errorMessage);
+    bool registerMouseButton(unsigned int button, QString *errorMessage);
     void unregisterHotkey();
     quint64 activeWindow() const;
 
@@ -28,4 +29,5 @@ private:
     unsigned long rootWindow_ = 0;
     unsigned int keycode_ = 0;
     unsigned int modifiers_ = 0;
+    unsigned int mouseButton_ = 0;
 };
