@@ -17,6 +17,7 @@
 #include <QIcon>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPen>
 #include <QPixmap>
 #include <QProcess>
 #include <QSignalBlocker>
@@ -94,6 +95,15 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&dictateHotkey_, &X11Hotkey::activated, this, [this]() {
         handleHotkey(OutputMode::Original, dictateHotkey_);
     });
+    connect(&mouseDictateHotkey_, &X11Hotkey::activated, this, [this]() {
+        handleHotkey(OutputMode::Original, mouseDictateHotkey_);
+    });
+    connect(&mouseFinishHotkey_, &X11Hotkey::activated, this, [this]() {
+        if (state_ == State::Recording) {
+            sendEnterAfterTranscription_ = true;
+            stopRecording(currentOutputMode_);
+        }
+    });
     connect(&translateHotkey_, &X11Hotkey::activated, this, [this]() {
         handleHotkey(OutputMode::English, translateHotkey_);
     });
@@ -122,20 +132,41 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&recorder_, &AudioRecorder::failed, this, &SpeakToComputerApp::handleRecordingFailed);
     connect(&whisper_, &WhisperRunner::transcriptionReady, this, &SpeakToComputerApp::handleTranscriptionReady);
     connect(&whisper_, &WhisperRunner::failed, this, &SpeakToComputerApp::handleTranscriptionFailed);
+    connect(&buzzAsr_, &BuzzAsrRunner::transcriptionReady, this, &SpeakToComputerApp::handleTranscriptionReady);
+    connect(&buzzAsr_, &BuzzAsrRunner::failed, this, &SpeakToComputerApp::handleTranscriptionFailed);
+    connect(&realtime_, &RealtimeSidecar::sessionFailed, this, &SpeakToComputerApp::handleRealtimeSessionFailed);
+    connect(&realtime_, &RealtimeSidecar::serverFailed, this, &SpeakToComputerApp::handleRealtimeServerFailed);
+    connect(&realtime_, &RealtimeSidecar::transcriptionUpdated, this, [this](const QString &text) {
+        if (!text.trimmed().isEmpty()) {
+            lastTranscription_ = text;
+            trayCopyLastTextAction_->setEnabled(true);
+        }
+    });
     connect(&wakeWordListener_, &WakeWordListener::detected, this, &SpeakToComputerApp::handleWakeWordDetected);
     connect(&wakeWordListener_, &WakeWordListener::failed, this, &SpeakToComputerApp::handleWakeWordFailure);
     connect(&overlay_, &OverlayWidget::modelSelected, this, &SpeakToComputerApp::handleModelSelected);
+    connect(&overlay_, &OverlayWidget::engineSelected, this, &SpeakToComputerApp::handleEngineSelected);
+    connect(&overlay_, &OverlayWidget::languageSelected, this, &SpeakToComputerApp::handleLanguageSelected);
+    connect(&overlay_, &OverlayWidget::sendKeywordToggled, this, &SpeakToComputerApp::handleSendKeywordToggled);
+    connect(&overlay_, &OverlayWidget::pasteTargetSelected, this, &SpeakToComputerApp::handlePasteTargetSelected);
     connect(&overlay_, &OverlayWidget::vadPresetSelected, this, &SpeakToComputerApp::handleVadPresetSelected);
     connect(&overlay_, &OverlayWidget::closeRequested, this, &SpeakToComputerApp::cancelRecording);
     connect(&overlay_, &OverlayWidget::visibilityChanged, this, &SpeakToComputerApp::setOverlayCloseHotkeyEnabled);
     connect(&elapsedTimer_, &QTimer::timeout, this, [this]() {
         overlay_.setElapsedMs(recordingClock_.elapsed());
+        if (state_ == State::Recording) {
+            overlay_.setGpuMemoryLabel(gpuMemoryLabel());
+        }
     });
     elapsedTimer_.setInterval(200);
 
-    overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
-    overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
-    overlay_.setModelControlEnabled(true);
+    refreshModelUi();
+    refreshEngineUi();
+    refreshLanguageUi();
+    refreshSendKeywordUi();
+    refreshPasteTargetUi();
+    overlay_.setMiniModeEnabled(settings_.miniOverlayEnabled);
+    setOverlayRuntimeControlsEnabled(true);
     refreshVadRuntimeStatus();
     updateOverlayVadControl();
 
@@ -148,8 +179,71 @@ SpeakToComputerApp::~SpeakToComputerApp()
     meetingDialog_.reset();
 }
 
+void SpeakToComputerApp::refreshModelUi()
+{
+    if (settings_.isBuzzAsrEngine()) {
+        // BuzzASR ships one fixed Polish model, so the whisper model picker does not apply.
+        overlay_.setModelLabel(QStringLiteral("polish"));
+        overlay_.setAvailableModelPaths({});
+        overlay_.setModelControlEnabled(false);
+        return;
+    }
+    overlay_.setModelControlEnabled(true);
+    if (settings_.isRealtimeEngine()) {
+        overlay_.setModelLabel(AppSettings::realtimeModelLabel(settings_.realtimeModel));
+        // Overlay expects file paths; use synthetic paths "realtime:<name>" so selection round-trips.
+        QStringList paths;
+        for (const QString &name : AppSettings::realtimeModelChoices()) {
+            paths << (QStringLiteral("realtime:") + name);
+        }
+        overlay_.setAvailableModelPaths(paths);
+    } else {
+        overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
+        overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+    }
+}
+
+void SpeakToComputerApp::refreshEngineUi()
+{
+    overlay_.setEngineLabel(AppSettings::engineLabel(settings_.engine));
+}
+
+void SpeakToComputerApp::refreshLanguageUi()
+{
+    overlay_.setLanguageLabel(AppSettings::languageLabel(settings_.language));
+}
+
+void SpeakToComputerApp::refreshSendKeywordUi()
+{
+    overlay_.setSendKeyword(settings_.sendKeyword, settings_.sendKeywordEnabled);
+}
+
+void SpeakToComputerApp::refreshPasteTargetUi()
+{
+    overlay_.setPasteTargetLabel(AppSettings::pasteTargetLabel(settings_.pasteTarget));
+}
+
+quint64 SpeakToComputerApp::effectivePasteWindow() const
+{
+    // Focus mode: leave target as 0 so xdotool pastes into whatever currently has focus.
+    if (settings_.isFocusPasteTarget()) {
+        return 0;
+    }
+    return targetWindow_;
+}
+
+void SpeakToComputerApp::setOverlayRuntimeControlsEnabled(bool enabled)
+{
+    overlay_.setModelControlEnabled(enabled);
+    overlay_.setEngineControlEnabled(enabled);
+    overlay_.setLanguageControlEnabled(enabled);
+    overlay_.setSendKeywordControlEnabled(enabled);
+    overlay_.setPasteTargetControlEnabled(enabled);
+}
+
 bool SpeakToComputerApp::start()
 {
+    BuzzAsrRunner::killOrphanedDaemons();
     QString errorMessage;
     if (!dictateHotkey_.registerHotkey(settings_.hotkeyDictate, &errorMessage)) {
         const QString fullMessage =
@@ -174,12 +268,34 @@ bool SpeakToComputerApp::start()
     }
     qInfo().noquote() << "speak-to-computer listening for dictation hotkey" << settings_.hotkeyDictate
                       << "and English hotkey" << settings_.hotkeyTranslateEn;
-    qInfo().noquote() << "settings:" << settings_.settingsPath;
+    if (!mouseDictateHotkey_.registerMouseButton(10, &errorMessage)) {
+        qWarning().noquote() << errorMessage;
+    } else {
+        qInfo() << "listening for dictation mouse button 10";
+    }
+    qInfo().noquote() << "settings:" << settings_.settingsPath
+                      << "engine:" << settings_.engine;
     refreshVadRuntimeStatus();
     trayStatusOverride_.clear();
     wakeWordAvailable_ = true;
     updateWakeWordListening();
     updateTrayStatus();
+
+    if (settings_.isRealtimeEngine()) {
+        trayStatusOverride_ = QStringLiteral("Loading Realtime model…");
+        updateTrayStatus();
+        QString loadError;
+        if (!ensureRealtimeServerLoaded(&loadError)) {
+            qWarning().noquote() << loadError;
+            trayStatusOverride_ = QStringLiteral("Realtime load failed (see logs)");
+            updateTrayStatus();
+            overlay_.showError(loadError, QStringLiteral("Realtime engine"));
+        } else {
+            trayStatusOverride_.clear();
+            updateTrayStatus();
+        }
+    }
+
     return true;
 }
 
@@ -187,6 +303,9 @@ void SpeakToComputerApp::handleHotkey(OutputMode outputMode, const X11Hotkey &so
 {
     if (meetingDialog_->isBusy()) {
         overlay_.showError(QStringLiteral("Meeting recording or transcription is in progress."), QStringLiteral("Meeting Recordings"));
+        return;
+    }
+    if (engineSwitchInProgress_) {
         return;
     }
     if (hotkeyDebounce_.isValid() && hotkeyDebounce_.elapsed() < 500) {
@@ -205,14 +324,26 @@ void SpeakToComputerApp::startRecording(OutputMode outputMode, quint64 targetWin
 {
     stopWakeWordListening();
     trayStatusOverride_.clear();
-    overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+    refreshModelUi();
     recordingStopRequested_ = false;
     vadEnabledForCurrentRecording_ = false;
+    sendEnterAfterTranscription_ = false;
     vadEndpointDetector_.clear();
 
     QString errorMessage;
     if (!validateRuntime(&errorMessage)) {
         showErrorAndReturnIdle(errorMessage);
+        return;
+    }
+
+    if (settings_.isRealtimeEngine()) {
+        startRealtimeSession(outputMode, targetWindow);
+        return;
+    }
+    if (settings_.isBuzzAsrEngine() && outputMode == OutputMode::English) {
+        showErrorAndReturnIdle(
+                QStringLiteral("BuzzASR is Polish only and does not support Translate-to-English. "
+                               "Use the whisper.cpp engine or the dictation hotkey."));
         return;
     }
 
@@ -229,19 +360,83 @@ void SpeakToComputerApp::startRecording(OutputMode outputMode, quint64 targetWin
     configureVadForCurrentRecording();
 
     state_ = State::Recording;
+    if (!mouseFinishHotkey_.registerMouseButton(9, &errorMessage)) {
+        qWarning().noquote() << errorMessage;
+    }
     recordingClock_.restart();
     elapsedTimer_.start();
-    overlay_.setModelControlEnabled(true);
+    setOverlayRuntimeControlsEnabled(true);
     overlay_.showRecording(outputLabel(currentOutputMode_), recordingHints());
+    updateOverlayVadControl();
     updateTrayStatus();
     qInfo().noquote() << "recording started using audio backend" << recorder_.activeBackendName()
                       << "output" << outputLabel(currentOutputMode_)
                       << "vadAutoStop" << (vadEnabledForCurrentRecording_ ? "enabled" : "disabled");
 }
 
+void SpeakToComputerApp::startRealtimeSession(OutputMode outputMode, quint64 targetWindow)
+{
+    if (outputMode == OutputMode::English) {
+        // SimulStreaming translate task can be wired later; keep UX clear.
+        showErrorAndReturnIdle(
+                QStringLiteral("Realtime engine does not support Translate-to-English yet. "
+                               "Use whisper.cpp engine or the dictation hotkey."));
+        return;
+    }
+
+    QString errorMessage;
+    if (!ensureRealtimeServerLoaded(&errorMessage)) {
+        showErrorAndReturnIdle(errorMessage);
+        return;
+    }
+
+    currentOutputMode_ = outputMode;
+    targetWindow_ = targetWindow;
+    playActivationSound();
+    if (!realtime_.startSession(targetWindow, settings_, &errorMessage)) {
+        showErrorAndReturnIdle(errorMessage);
+        return;
+    }
+
+    state_ = State::Recording;
+    recordingClock_.restart();
+    elapsedTimer_.start();
+    setOverlayRuntimeControlsEnabled(true);
+    overlay_.showRecording(QStringLiteral("Realtime · live"),
+            {QStringLiteral("%1 again to stop").arg(settings_.hotkeyDictate)});
+    updateOverlayVadControl();
+    updateTrayStatus();
+    qInfo().noquote() << "realtime session started model" << settings_.realtimeModel;
+}
+
+void SpeakToComputerApp::stopRealtimeSession()
+{
+    if (state_ != State::Recording || !settings_.isRealtimeEngine()) {
+        return;
+    }
+    recordingStopRequested_ = true;
+    elapsedTimer_.stop();
+    realtime_.stopSession();
+    playEndSound();
+    state_ = State::Idle;
+    trayStatusOverride_.clear();
+    setOverlayRuntimeControlsEnabled(true);
+    overlay_.showDone(QStringLiteral("Realtime session stopped"));
+    updateWakeWordListening();
+    updateTrayStatus();
+    QTimer::singleShot(900, &overlay_, &OverlayWidget::hide);
+    qInfo() << "realtime session stopped by hotkey";
+}
+
 void SpeakToComputerApp::stopRecording(OutputMode outputMode)
 {
     if (state_ != State::Recording) {
+        return;
+    }
+
+    if (settings_.isRealtimeEngine()) {
+        Q_UNUSED(outputMode);
+        stopRealtimeSession();
         return;
     }
 
@@ -271,11 +466,15 @@ void SpeakToComputerApp::stopRecording(OutputMode outputMode)
     }
 
     state_ = State::Transcribing;
-    overlay_.setModelControlEnabled(false);
+    setOverlayRuntimeControlsEnabled(false);
     overlay_.showTranscribing(outputLabel(currentOutputMode_));
     updateTrayStatus();
     qInfo().noquote() << "recording stopped, transcribing output" << outputLabel(currentOutputMode_);
 
+    if (settings_.isBuzzAsrEngine()) {
+        buzzAsr_.transcribe(currentWavPath_, settings_);
+        return;
+    }
     AppSettings transcriptionSettings = settings_;
     transcriptionSettings.translateToEn = currentOutputMode_ == OutputMode::English;
     whisper_.transcribe(currentWavPath_, transcriptionSettings);
@@ -293,6 +492,18 @@ void SpeakToComputerApp::cancelRecording()
     vadEndpointDetector_.clear();
     elapsedTimer_.stop();
 
+    if (settings_.isRealtimeEngine()) {
+        realtime_.stopSession();
+        playEndSound();
+        state_ = State::Idle;
+        trayStatusOverride_.clear();
+        updateWakeWordListening();
+        updateTrayStatus();
+        overlay_.hide();
+        qInfo().noquote() << "realtime session cancelled";
+        return;
+    }
+
     QString errorMessage;
     recorder_.stop(&errorMessage);
     playEndSound();
@@ -304,6 +515,36 @@ void SpeakToComputerApp::cancelRecording()
     updateTrayStatus();
     overlay_.hide();
     qInfo().noquote() << "recording cancelled";
+}
+
+bool SpeakToComputerApp::ensureRealtimeServerLoaded(QString *errorMessage)
+{
+    return realtime_.loadServer(settings_, errorMessage);
+}
+
+void SpeakToComputerApp::unloadRealtimeServer()
+{
+    realtime_.unloadServer();
+}
+
+void SpeakToComputerApp::handleRealtimeSessionFailed(const QString &message)
+{
+    if (state_ == State::Recording && settings_.isRealtimeEngine()) {
+        elapsedTimer_.stop();
+        showErrorAndReturnIdle(message);
+    }
+}
+
+void SpeakToComputerApp::handleRealtimeServerFailed(const QString &message)
+{
+    qWarning().noquote() << message;
+    if (state_ == State::Recording && settings_.isRealtimeEngine()) {
+        elapsedTimer_.stop();
+        showErrorAndReturnIdle(message);
+    } else {
+        trayStatusOverride_ = QStringLiteral("Realtime server stopped");
+        updateTrayStatus();
+    }
 }
 
 void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
@@ -351,7 +592,7 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
         }
         state_ = State::Idle;
         trayStatusOverride_.clear();
-        overlay_.setModelControlEnabled(true);
+        setOverlayRuntimeControlsEnabled(true);
         overlay_.showDone(QStringLiteral("%1 text written to %2").arg(outputLabel(currentOutputMode_), settings_.handoffDirectory));
         updateWakeWordListening();
         updateTrayStatus();
@@ -360,15 +601,22 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
         return;
     }
 
-    if (!paster_.paste(targetWindow_, text, &errorMessage)) {
+    qInfo().noquote() << "text:" << text;
+    lastTranscription_ = text;
+    trayCopyLastTextAction_->setEnabled(true);
+    if (!paster_.paste(effectivePasteWindow(), text, &errorMessage, sendEnterAfterTranscription_)) {
         showErrorAndReturnIdle(errorMessage);
         return;
     }
 
     state_ = State::Idle;
     trayStatusOverride_.clear();
-    overlay_.setModelControlEnabled(true);
-    overlay_.showDone(QStringLiteral("%1 text pasted into the active window").arg(outputLabel(currentOutputMode_)));
+    setOverlayRuntimeControlsEnabled(true);
+    const QString pasteWhere = settings_.isFocusPasteTarget()
+            ? QStringLiteral("current focus")
+            : QStringLiteral("pinned window");
+    overlay_.showDone(QStringLiteral("%1 text pasted into %2")
+                              .arg(outputLabel(currentOutputMode_), pasteWhere));
     updateWakeWordListening();
     updateTrayStatus();
     qInfo() << "transcription pasted";
@@ -407,6 +655,9 @@ void SpeakToComputerApp::handleRecordingFailed(const QString &message)
 
 void SpeakToComputerApp::handleModelSelected(const QString &modelPath)
 {
+    if (engineSwitchInProgress_) {
+        return;
+    }
     QString errorMessage;
     if (!applyModelSelection(modelPath, &errorMessage)) {
         if (errorMessage.isEmpty()) {
@@ -415,6 +666,275 @@ void SpeakToComputerApp::handleModelSelected(const QString &modelPath)
         qWarning().noquote() << errorMessage;
         return;
     }
+}
+
+void SpeakToComputerApp::handleEngineSelected(const QString &engineId)
+{
+    if (engineSwitchInProgress_) {
+        return;
+    }
+    if (state_ == State::Transcribing) {
+        return;
+    }
+
+    QString errorMessage;
+    if (!applyEngineSelection(engineId, &errorMessage)) {
+        if (errorMessage.isEmpty()) {
+            return;
+        }
+        qWarning().noquote() << errorMessage;
+        showErrorAndReturnIdle(errorMessage);
+    }
+}
+
+void SpeakToComputerApp::handleLanguageSelected(const QString &languageCode)
+{
+    if (engineSwitchInProgress_) {
+        return;
+    }
+    if (state_ == State::Transcribing) {
+        return;
+    }
+
+    QString errorMessage;
+    if (!applyLanguageSelection(languageCode, &errorMessage)) {
+        if (errorMessage.isEmpty()) {
+            return;
+        }
+        qWarning().noquote() << errorMessage;
+        showErrorAndReturnIdle(errorMessage);
+    }
+}
+
+void SpeakToComputerApp::handleSendKeywordToggled(bool enabled)
+{
+    if (engineSwitchInProgress_ || state_ == State::Transcribing) {
+        return;
+    }
+    if (settings_.sendKeywordEnabled == enabled) {
+        return;
+    }
+
+    QString errorMessage;
+    if (!AppSettings::saveSendKeywordEnabled(settings_.settingsPath, enabled, &errorMessage)) {
+        qWarning().noquote() << errorMessage;
+        return;
+    }
+    settings_.sendKeywordEnabled = enabled;
+    realtime_.setSendKeywordEnabled(enabled);
+    refreshSendKeywordUi();
+    qInfo().noquote() << "send keyword" << settings_.sendKeyword << (enabled ? "enabled" : "disabled");
+}
+
+void SpeakToComputerApp::handlePasteTargetSelected(const QString &pasteTargetId)
+{
+    if (engineSwitchInProgress_ || state_ == State::Transcribing) {
+        return;
+    }
+
+    const QString next = AppSettings::normalizePasteTarget(pasteTargetId);
+    if (next == AppSettings::normalizePasteTarget(settings_.pasteTarget)) {
+        return;
+    }
+
+    QString errorMessage;
+    if (!AppSettings::savePasteTarget(settings_.settingsPath, next, &errorMessage)) {
+        qWarning().noquote() << errorMessage;
+        return;
+    }
+    settings_.pasteTarget = next;
+
+    // Switching to Pin mid-session re-pins whatever currently has focus.
+    if (settings_.isPinPasteTarget()
+            && (state_ == State::Recording || state_ == State::Idle)) {
+        const quint64 active = dictateHotkey_.activeWindow();
+        if (active != 0) {
+            targetWindow_ = active;
+        }
+    }
+
+    realtime_.setPasteTarget(settings_.pasteTarget);
+    realtime_.setTargetWindow(targetWindow_);
+    refreshPasteTargetUi();
+    qInfo().noquote() << "paste target" << settings_.pasteTarget;
+}
+
+bool SpeakToComputerApp::applyEngineSelection(const QString &engineId, QString *errorMessage)
+{
+    const QString nextEngine = AppSettings::normalizeEngine(engineId);
+    const QString previousEngine = AppSettings::normalizeEngine(settings_.engine);
+    if (nextEngine == previousEngine) {
+        if (errorMessage != nullptr) {
+            errorMessage->clear();
+        }
+        return false;
+    }
+
+    const bool wasRecording = state_ == State::Recording;
+    const OutputMode resumeMode = currentOutputMode_;
+    const quint64 resumeWindow = targetWindow_;
+
+    engineSwitchInProgress_ = true;
+    setOverlayRuntimeControlsEnabled(false);
+
+    if (wasRecording) {
+        // Discard in-progress audio / live session; restart fresh after switch.
+        recordingStopRequested_ = true;
+        vadEnabledForCurrentRecording_ = false;
+        vadEndpointDetector_.clear();
+        elapsedTimer_.stop();
+
+        if (settings_.isRealtimeEngine()) {
+            realtime_.stopSession();
+        } else {
+            QString stopError;
+            recorder_.stop(&stopError);
+            removeCurrentWav();
+        }
+
+        playEndSound();
+        state_ = State::Idle;
+        trayStatusOverride_.clear();
+    }
+
+    if (!AppSettings::saveEngine(settings_.settingsPath, nextEngine, errorMessage)) {
+        engineSwitchInProgress_ = false;
+        setOverlayRuntimeControlsEnabled(true);
+        return false;
+    }
+    settings_.engine = nextEngine;
+    refreshEngineUi();
+    refreshModelUi();
+
+    // Always drop Realtime server when leaving Live or when entering Batch.
+    if (previousEngine == QString::fromUtf8(AppSettings::kEngineRealtime)
+            || nextEngine == QString::fromUtf8(AppSettings::kEngineWhisperCpp)) {
+        unloadRealtimeServer();
+    }
+
+    if (settings_.isRealtimeEngine()) {
+        trayStatusOverride_ = QStringLiteral("Loading Realtime model…");
+        updateTrayStatus();
+        QString loadError;
+        if (!ensureRealtimeServerLoaded(&loadError)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = loadError;
+            }
+            trayStatusOverride_ = QStringLiteral("Realtime load failed");
+            updateTrayStatus();
+            engineSwitchInProgress_ = false;
+            setOverlayRuntimeControlsEnabled(true);
+            return false;
+        }
+        trayStatusOverride_.clear();
+        updateTrayStatus();
+    }
+
+    engineSwitchInProgress_ = false;
+    setOverlayRuntimeControlsEnabled(true);
+
+    qInfo().noquote() << "engine switched from" << previousEngine << "to" << nextEngine
+                      << (wasRecording ? "(restart session)" : "(idle)");
+
+    if (wasRecording) {
+        // Realtime has no translate mode — fall back to Original dictation.
+        OutputMode mode = resumeMode;
+        if (settings_.isRealtimeEngine() && mode == OutputMode::English) {
+            mode = OutputMode::Original;
+            qInfo() << "engine switch: Translate-to-English not supported on Realtime; using Original";
+        }
+        startRecording(mode, resumeWindow);
+        return true;
+    }
+
+    updateWakeWordListening();
+    updateTrayStatus();
+    return true;
+}
+
+bool SpeakToComputerApp::applyLanguageSelection(const QString &languageCode, QString *errorMessage)
+{
+    const QString nextLanguage = AppSettings::normalizeLanguage(languageCode);
+    const QString previousLanguage = AppSettings::normalizeLanguage(settings_.language);
+    if (nextLanguage == previousLanguage) {
+        if (errorMessage != nullptr) {
+            errorMessage->clear();
+        }
+        return false;
+    }
+
+    const bool wasRecording = state_ == State::Recording;
+    const OutputMode resumeMode = currentOutputMode_;
+    const quint64 resumeWindow = targetWindow_;
+
+    engineSwitchInProgress_ = true;
+    setOverlayRuntimeControlsEnabled(false);
+
+    if (wasRecording) {
+        recordingStopRequested_ = true;
+        vadEnabledForCurrentRecording_ = false;
+        vadEndpointDetector_.clear();
+        elapsedTimer_.stop();
+
+        if (settings_.isRealtimeEngine()) {
+            realtime_.stopSession();
+        } else {
+            QString stopError;
+            recorder_.stop(&stopError);
+            removeCurrentWav();
+        }
+
+        playEndSound();
+        state_ = State::Idle;
+        trayStatusOverride_.clear();
+    }
+
+    if (!AppSettings::saveLanguage(settings_.settingsPath, nextLanguage, errorMessage)) {
+        engineSwitchInProgress_ = false;
+        setOverlayRuntimeControlsEnabled(true);
+        return false;
+    }
+    settings_.language = nextLanguage;
+    refreshLanguageUi();
+
+    // Live server bakes --language at startup; reload when realtime is active.
+    if (settings_.isRealtimeEngine()) {
+        unloadRealtimeServer();
+        trayStatusOverride_ = QStringLiteral("Reloading language…");
+        updateTrayStatus();
+        QString loadError;
+        if (!ensureRealtimeServerLoaded(&loadError)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = loadError;
+            }
+            trayStatusOverride_ = QStringLiteral("Realtime load failed");
+            updateTrayStatus();
+            engineSwitchInProgress_ = false;
+            setOverlayRuntimeControlsEnabled(true);
+            return false;
+        }
+        trayStatusOverride_.clear();
+        updateTrayStatus();
+    }
+
+    engineSwitchInProgress_ = false;
+    setOverlayRuntimeControlsEnabled(true);
+
+    qInfo().noquote() << "language switched from" << previousLanguage << "to" << nextLanguage
+                      << (wasRecording ? "(restart session)" : "(idle)");
+
+    if (wasRecording) {
+        OutputMode mode = resumeMode;
+        if (settings_.isRealtimeEngine() && mode == OutputMode::English) {
+            mode = OutputMode::Original;
+        }
+        startRecording(mode, resumeWindow);
+        return true;
+    }
+
+    updateWakeWordListening();
+    updateTrayStatus();
+    return true;
 }
 
 void SpeakToComputerApp::showPreferences()
@@ -601,7 +1121,9 @@ void SpeakToComputerApp::refreshVadRuntimeStatus()
 void SpeakToComputerApp::updateOverlayVadControl()
 {
     overlay_.setVadAutostopPreset(settings_.vadAutostopEnabled, settings_.vadEndSilenceMs);
-    overlay_.setVadControlAvailable(vadRuntimeAvailable_);
+    // VAD only applies to batch recording — hide the chip in Live to keep overlay compact.
+    const bool showVad = vadRuntimeAvailable_ && !settings_.isRealtimeEngine();
+    overlay_.setVadControlAvailable(showVad);
 }
 
 void SpeakToComputerApp::configureVadForCurrentRecording()
@@ -641,6 +1163,47 @@ bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const
         }
         return false;
     }
+
+    if (settings_.isBuzzAsrEngine()) {
+        if (!QFileInfo::exists(settings_.buzzAsrPython) || !QFileInfo(settings_.buzzAsrPython).isExecutable()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("BuzzASR Python missing: %1\nRun scripts/install-buzzasr-runtime.sh to install the runtime.")
+                        .arg(settings_.buzzAsrPython);
+            }
+            return false;
+        }
+        if (!QFileInfo::exists(settings_.buzzAsrScript)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("BuzzASR script missing: %1").arg(settings_.buzzAsrScript);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    if (settings_.isRealtimeEngine()) {
+        if (QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("xclip was not found in PATH (required for Realtime paste).");
+            }
+            return false;
+        }
+        if (!QFileInfo::exists(settings_.realtimePython) || !QFileInfo(settings_.realtimePython).isExecutable()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("Realtime Python missing: %1\nRun scripts/simulstreaming-poc/setup.sh")
+                                        .arg(settings_.realtimePython);
+            }
+            return false;
+        }
+        if (!QFileInfo::exists(settings_.realtimeServerScript)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("Realtime server script missing: %1").arg(settings_.realtimeServerScript);
+            }
+            return false;
+        }
+        return true;
+    }
+
     if (!QFileInfo(settings_.whisperCli).isExecutable()) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("whisper-cli is missing or not executable: %1").arg(settings_.whisperCli);
@@ -700,6 +1263,36 @@ bool SpeakToComputerApp::applyModelSelection(const QString &selectedModelPath, Q
         }
         return false;
     }
+
+    if (settings_.isRealtimeEngine()) {
+        QString modelName = selectedModelPath;
+        if (modelName.startsWith(QStringLiteral("realtime:"))) {
+            modelName = modelName.mid(QStringLiteral("realtime:").size());
+        }
+        if (modelName == settings_.realtimeModel) {
+            if (errorMessage != nullptr) {
+                errorMessage->clear();
+            }
+            return false;
+        }
+        if (!AppSettings::saveRealtimeModel(settings_.settingsPath, modelName, errorMessage)) {
+            return false;
+        }
+        settings_.realtimeModel = modelName;
+        refreshModelUi();
+        // Reload server with new model (frees previous GPU weights).
+        unloadRealtimeServer();
+        QString loadError;
+        if (!ensureRealtimeServerLoaded(&loadError)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = loadError;
+            }
+            return false;
+        }
+        qInfo().noquote() << "selected realtime model" << settings_.realtimeModel;
+        return true;
+    }
+
     if (selectedModelPath == settings_.model) {
         if (errorMessage != nullptr) {
             errorMessage->clear();
@@ -711,10 +1304,22 @@ bool SpeakToComputerApp::applyModelSelection(const QString &selectedModelPath, Q
     }
 
     settings_.model = selectedModelPath;
-    overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
-    overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+    refreshModelUi();
     qInfo().noquote() << "selected whisper model" << settings_.model;
     return true;
+}
+
+void SpeakToComputerApp::handleMiniOverlayToggled(bool enabled)
+{
+    QString errorMessage;
+    if (!AppSettings::saveMiniOverlayEnabled(settings_.settingsPath, enabled, &errorMessage)) {
+        const QSignalBlocker blocker(trayMiniOverlayAction_);
+        trayMiniOverlayAction_->setChecked(settings_.miniOverlayEnabled);
+        overlay_.showError(errorMessage);
+        return;
+    }
+    settings_.miniOverlayEnabled = enabled;
+    overlay_.setMiniModeEnabled(enabled);
 }
 
 bool SpeakToComputerApp::applySettings(const AppSettings &newSettings, QString *errorMessage)
@@ -748,15 +1353,45 @@ bool SpeakToComputerApp::applySettings(const AppSettings &newSettings, QString *
         return false;
     }
 
+    const QString previousEngine = settings_.engine;
+    const QString previousRealtimeModel = settings_.realtimeModel;
     settings_ = AppSettings::loadFromPath(newSettings.settingsPath);
     meetingDialog_->setSettings(settings_);
+    overlay_.setMiniModeEnabled(settings_.miniOverlayEnabled);
     wakeWordAvailable_ = true;
     trayStatusOverride_.clear();
-    overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
-    overlay_.setAvailableModelPaths(AppSettings::existingModelPaths(settings_.model));
+    refreshModelUi();
+    refreshEngineUi();
+    refreshLanguageUi();
+    refreshSendKeywordUi();
+    refreshPasteTargetUi();
+    realtime_.setPasteTarget(settings_.pasteTarget);
     refreshVadRuntimeStatus();
     updateOverlayVadControl();
-    qInfo().noquote() << "preferences updated from" << settings_.settingsPath;
+
+    // Always unload when leaving realtime or changing realtime model; load only if realtime selected.
+    const bool engineChanged = previousEngine != settings_.engine;
+    const bool realtimeModelChanged = previousRealtimeModel != settings_.realtimeModel;
+    if (engineChanged || (settings_.isRealtimeEngine() && realtimeModelChanged) || settings_.isWhisperCppEngine()) {
+        unloadRealtimeServer();
+    }
+    if (settings_.isRealtimeEngine()) {
+        trayStatusOverride_ = QStringLiteral("Loading Realtime model…");
+        updateTrayStatus();
+        QString loadError;
+        if (!ensureRealtimeServerLoaded(&loadError)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = loadError;
+            }
+            trayStatusOverride_ = QStringLiteral("Realtime load failed");
+            updateTrayStatus();
+            return false;
+        }
+        trayStatusOverride_.clear();
+    }
+
+    qInfo().noquote() << "preferences updated from" << settings_.settingsPath
+                      << "engine" << settings_.engine;
     return true;
 }
 
@@ -806,12 +1441,38 @@ bool SpeakToComputerApp::maybeOfferModelFallback(const QString &message)
     return true;
 }
 
+QString SpeakToComputerApp::gpuMemoryLabel() const
+{
+    QProcess nvidiaSmi;
+    nvidiaSmi.start(QStringLiteral("nvidia-smi"),
+            {QStringLiteral("--query-gpu=memory.used,memory.total"),
+                    QStringLiteral("--format=csv,noheader,nounits")});
+    if (!nvidiaSmi.waitForFinished(500) || nvidiaSmi.exitCode() != 0) {
+        return QString();
+    }
+    const QStringList fields = QString::fromUtf8(nvidiaSmi.readAllStandardOutput())
+                                       .trimmed()
+                                       .split(QLatin1Char(','));
+    if (fields.size() < 2) {
+        return QString();
+    }
+    bool usedOk = false;
+    bool totalOk = false;
+    const int usedMb = fields.at(0).trimmed().toInt(&usedOk);
+    const int totalMb = fields.at(1).trimmed().toInt(&totalOk);
+    if (!usedOk || !totalOk || totalMb <= 0) {
+        return QString();
+    }
+    return QStringLiteral("GPU %1/%2 MB").arg(usedMb).arg(totalMb);
+}
+
 QString SpeakToComputerApp::outputLabel(OutputMode outputMode) const
 {
-    if (outputMode == OutputMode::English) {
-        return QStringLiteral("English");
-    }
-    return QStringLiteral("Original (%1)").arg(originalLanguageLabel());
+    const QString gpu = gpuMemoryLabel();
+    const QString base = outputMode == OutputMode::English
+            ? QStringLiteral("English")
+            : QStringLiteral("Original (%1)").arg(originalLanguageLabel());
+    return gpu.isEmpty() ? base : QStringLiteral("%1 · %2").arg(base, gpu);
 }
 
 QString SpeakToComputerApp::originalLanguageLabel() const
@@ -829,9 +1490,10 @@ QString SpeakToComputerApp::hotkeyFor(OutputMode outputMode) const
 
 QStringList SpeakToComputerApp::recordingHints() const
 {
+    // One compact line — overlay keeps only the first secondary hint.
     return {
-            QStringLiteral("%1: finish as %2").arg(hotkeyFor(OutputMode::Original), outputLabel(OutputMode::Original)),
-            QStringLiteral("%1: finish as %2").arg(hotkeyFor(OutputMode::English), outputLabel(OutputMode::English)),
+            QStringLiteral("%1 stop · %2 EN")
+                    .arg(hotkeyFor(OutputMode::Original), hotkeyFor(OutputMode::English)),
     };
 }
 
@@ -852,11 +1514,19 @@ QString SpeakToComputerApp::trayStatusText() const
     }
 
     if (state_ == State::Recording) {
+        if (settings_.isRealtimeEngine()) {
+            return QStringLiteral("Realtime live. Press %1 to stop.")
+                    .arg(hotkeyFor(currentOutputMode_));
+        }
         return QStringLiteral("Recording %1. Press %2 to finish.")
                 .arg(outputLabel(currentOutputMode_), hotkeyFor(currentOutputMode_));
     }
     if (state_ == State::Transcribing) {
         return QStringLiteral("Transcribing %1.").arg(outputLabel(currentOutputMode_));
+    }
+    if (settings_.isRealtimeEngine()) {
+        return QStringLiteral("Engine Realtime (%1). %2 starts live paste.")
+                .arg(AppSettings::realtimeModelLabel(settings_.realtimeModel), settings_.hotkeyDictate);
     }
     if (settings_.wakeWordEnabled) {
         if (wakeWordListener_.isRunning()) {
@@ -902,6 +1572,20 @@ void SpeakToComputerApp::setupTrayIcon()
     });
     trayStopMeetingAction_ = trayMenu_.addAction(QStringLiteral("Stop meeting recording"));
     connect(trayStopMeetingAction_, &QAction::triggered, meetingDialog_.get(), &MeetingDialog::stopRecording);
+    trayMiniOverlayAction_ = trayMenu_.addAction(QStringLiteral("Tryb mini"));
+    trayMiniOverlayAction_->setCheckable(true);
+    trayMiniOverlayAction_->setChecked(settings_.miniOverlayEnabled);
+    connect(trayMiniOverlayAction_, &QAction::toggled, this, &SpeakToComputerApp::handleMiniOverlayToggled);
+    trayCopyLastTextAction_ = trayMenu_.addAction(QStringLiteral("Kopiuj ostatni tekst"));
+    trayCopyLastTextAction_->setEnabled(false);
+    connect(trayCopyLastTextAction_, &QAction::triggered, this, [this]() {
+        QString errorMessage;
+        if (!paster_.copy(lastTranscription_, &errorMessage)) {
+            overlay_.showError(errorMessage);
+            return;
+        }
+        trayIcon_.showMessage(QStringLiteral("Speak to Computer"), QStringLiteral("Ostatni tekst skopiowany."));
+    });
     trayWakeWordAction_ = trayMenu_.addAction(QStringLiteral("Wake Word Listening"));
     trayWakeWordAction_->setCheckable(true);
     trayWakeWordAction_->setChecked(settings_.wakeWordEnabled);
@@ -937,9 +1621,10 @@ void SpeakToComputerApp::setOverlayCloseHotkeyEnabled(bool enabled)
     }
 
     QString errorMessage;
-    // The overlay intentionally does not take focus, so Esc must be grabbed globally while it is visible.
-    if (!overlayCloseHotkey_.registerHotkey(QStringLiteral("Escape"), &errorMessage)) {
-        qWarning().noquote() << "Could not register overlay close hotkey Escape:" << errorMessage;
+    // Overlay does not take focus, so close must be a global grab while visible.
+    // Shift+Esc avoids accidental cancel from bare Escape during dictation.
+    if (!overlayCloseHotkey_.registerHotkey(QStringLiteral("Shift+Escape"), &errorMessage)) {
+        qWarning().noquote() << "Could not register overlay close hotkey Shift+Escape:" << errorMessage;
         return;
     }
 
@@ -948,6 +1633,13 @@ void SpeakToComputerApp::setOverlayCloseHotkeyEnabled(bool enabled)
 
 void SpeakToComputerApp::updateTrayStatus()
 {
+    if (state_ != State::Recording) {
+        mouseFinishHotkey_.unregisterHotkey();
+    }
+    if (trayMiniOverlayAction_ != nullptr && trayMiniOverlayAction_->isChecked() != settings_.miniOverlayEnabled) {
+        const QSignalBlocker blocker(trayMiniOverlayAction_);
+        trayMiniOverlayAction_->setChecked(settings_.miniOverlayEnabled);
+    }
     if (trayWakeWordAction_ != nullptr && trayWakeWordAction_->isChecked() != settings_.wakeWordEnabled) {
         const QSignalBlocker blocker(trayWakeWordAction_);
         trayWakeWordAction_->setChecked(settings_.wakeWordEnabled);
@@ -980,20 +1672,24 @@ void SpeakToComputerApp::showAlertAndReturnIdle(const QString &message)
     vadEnabledForCurrentRecording_ = false;
     vadEndpointDetector_.clear();
     trayStatusOverride_ = QStringLiteral("Alert: %1").arg(message);
-    overlay_.setModelControlEnabled(true);
-    overlay_.showError(message, QStringLiteral("Dictation alert"));
+    setOverlayRuntimeControlsEnabled(true);
+    // Empty result is one sentence. 15s felt like the window never closed.
+    overlay_.showError(message, QStringLiteral("Dictation alert"), 2500);
     updateWakeWordListening();
     updateTrayStatus();
 }
 
 void SpeakToComputerApp::showErrorAndReturnIdle(const QString &message)
 {
+    if (realtime_.isSessionActive()) {
+        realtime_.stopSession();
+    }
     state_ = State::Idle;
     recordingStopRequested_ = false;
     vadEnabledForCurrentRecording_ = false;
     vadEndpointDetector_.clear();
     trayStatusOverride_ = QStringLiteral("Error: %1").arg(message);
-    overlay_.setModelControlEnabled(true);
+    setOverlayRuntimeControlsEnabled(true);
     overlay_.showError(message);
     updateWakeWordListening();
     updateTrayStatus();
@@ -1002,6 +1698,11 @@ void SpeakToComputerApp::showErrorAndReturnIdle(const QString &message)
 void SpeakToComputerApp::quitApplication()
 {
     stopWakeWordListening();
+    if (state_ == State::Recording) {
+        cancelRecording();
+    }
+    unloadRealtimeServer();
+    BuzzAsrRunner::killOrphanedDaemons();
     trayIcon_.hide();
     QCoreApplication::quit();
 }
@@ -1027,7 +1728,15 @@ void SpeakToComputerApp::playActivationSound()
         qWarning().noquote() << "activation sound not found:" << resolvedPath;
         return;
     }
-    QProcess::startDetached(QStringLiteral("ffplay"), {QStringLiteral("-nodisp"), QStringLiteral("-autoexit"), QStringLiteral("-volume"), QStringLiteral("50"), resolvedPath});
+    // -loglevel quiet: avoid dumping wav metadata/stats into the tray console.
+    QProcess::startDetached(QStringLiteral("ffplay"),
+            {QStringLiteral("-nodisp"),
+                    QStringLiteral("-autoexit"),
+                    QStringLiteral("-loglevel"),
+                    QStringLiteral("quiet"),
+                    QStringLiteral("-volume"),
+                    QStringLiteral("50"),
+                    resolvedPath});
 }
 
 void SpeakToComputerApp::playEndSound()
@@ -1043,5 +1752,12 @@ void SpeakToComputerApp::playEndSound()
         qWarning().noquote() << "end sound not found:" << resolvedPath;
         return;
     }
-    QProcess::startDetached(QStringLiteral("ffplay"), {QStringLiteral("-nodisp"), QStringLiteral("-autoexit"), QStringLiteral("-volume"), QStringLiteral("50"), resolvedPath});
+    QProcess::startDetached(QStringLiteral("ffplay"),
+            {QStringLiteral("-nodisp"),
+                    QStringLiteral("-autoexit"),
+                    QStringLiteral("-loglevel"),
+                    QStringLiteral("quiet"),
+                    QStringLiteral("-volume"),
+                    QStringLiteral("50"),
+                    resolvedPath});
 }
