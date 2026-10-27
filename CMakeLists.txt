@@ -5,12 +5,14 @@ project(speak-to-computer VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 find_package(X11 REQUIRED)
 include(CTest)
 
 add_executable(speak-to-computer
+    assets/icons.qrc
     src/AppSettings.cpp
     src/AppSettings.h
     src/AudioRecorder.cpp
@@ -23,6 +25,10 @@ add_executable(speak-to-computer
     src/OverlayWidget.h
     src/PreferencesDialog.cpp
     src/PreferencesDialog.h
+    src/BuzzAsrRunner.cpp
+    src/BuzzAsrRunner.h
+    src/RealtimeSidecar.cpp
+    src/RealtimeSidecar.h
     src/VadEndpointDetector.cpp
     src/VadEndpointDetector.h
     src/WebRtcVad.cpp
@@ -57,6 +63,7 @@ target_link_libraries(speak-to-computer PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Network
     ${X11_LIBRARIES}
 )
 
@@ -87,14 +94,21 @@ if(BUILD_TESTING)
     find_package(Qt6 REQUIRED COMPONENTS Test)
 
     add_executable(speak-to-computer-tests
+        assets/icons.qrc
         src/AppSettings.cpp
         src/AppSettings.h
         src/AudioRecorder.cpp
         src/AudioRecorder.h
         src/FileHandoff.cpp
         src/FileHandoff.h
+        src/ClipboardPaster.cpp
+        src/ClipboardPaster.h
+        src/BuzzAsrRunner.cpp
+        src/BuzzAsrRunner.h
         src/OverlayWidget.cpp
         src/OverlayWidget.h
+        src/PreferencesDialog.cpp
+        src/PreferencesDialog.h
         src/TranscriptCleaner.cpp
         src/TranscriptCleaner.h
         src/VadEndpointDetector.cpp
@@ -112,4 +126,6 @@ if(BUILD_TESTING)
     target_link_libraries(speak-to-computer-tests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 
     add_test(NAME speak-to-computer-core COMMAND speak-to-computer-tests)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME buzzasr-sidecar COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/BuzzAsrSidecarTest.py)
 endif()
