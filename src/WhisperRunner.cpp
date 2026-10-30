@@ -62,7 +62,7 @@ WhisperRunner::WhisperRunner(QObject *parent)
             emit failed(QStringLiteral("whisper-cli failed (model: %1): %2%3").arg(currentModelPath_, details, hint));
             return;
         }
-        emit transcriptionReady(TranscriptCleaner::cleanup(stdoutText));
+        emit transcriptionReady(timestamps_ ? stdoutText : TranscriptCleaner::cleanup(stdoutText));
     });
     connect(&process_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error != QProcess::UnknownError) {
@@ -93,7 +93,7 @@ WhisperRunner::~WhisperRunner()
     }
 }
 
-void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settings)
+void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settings, bool timestamps)
 {
     if (process_.state() != QProcess::NotRunning) {
         emit failed(QStringLiteral("whisper-cli is already running."));
@@ -124,8 +124,8 @@ void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settin
             QStringLiteral("-t"),
             QString::number(settings.threads),
             QStringLiteral("-np"),
-            QStringLiteral("-nt"),
     };
+    if (!timestamps) arguments << QStringLiteral("-nt");
     if (settings.translateToEn) {
         arguments << QStringLiteral("-tr");
     }
@@ -138,5 +138,6 @@ void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settin
     currentWhisperCliPath_ = settings.whisperCli;
     currentModelPath_ = settings.model;
     currentWavPath_ = wavPath;
+    timestamps_ = timestamps;
     process_.start();
 }
