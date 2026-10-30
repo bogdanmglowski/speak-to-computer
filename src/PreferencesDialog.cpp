@@ -4,11 +4,14 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFrame>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
+#include <QHBoxLayout>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -171,6 +174,23 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     outputGroup_->setLayout(outputLayout);
     sectionsLayout->addWidget(outputGroup_, 3, 0, 1, 2);
 
+    auto *meetingsSection = new QGroupBox(QStringLiteral("Meeting Recordings"), content);
+    auto *meetingsLayout = createFormLayout(meetingsSection);
+    auto *directoryRow = new QWidget(meetingsSection);
+    auto *directoryLayout = new QHBoxLayout(directoryRow);
+    directoryLayout->setContentsMargins(0, 0, 0, 0);
+    meetingsDirectoryEdit_ = new QLineEdit(settings.meetingsDirectory, directoryRow);
+    auto *browse = new QPushButton(QStringLiteral("Browse…"), directoryRow);
+    directoryLayout->addWidget(meetingsDirectoryEdit_);
+    directoryLayout->addWidget(browse);
+    connect(browse, &QPushButton::clicked, this, [this]() {
+        const QString directory = QFileDialog::getExistingDirectory(this, QStringLiteral("Meeting recordings directory"),
+                AppSettings::expandUserPath(meetingsDirectoryEdit_->text()));
+        if (!directory.isEmpty()) meetingsDirectoryEdit_->setText(directory);
+    });
+    meetingsLayout->addRow(QStringLiteral("Recordings directory"), directoryRow);
+    sectionsLayout->addWidget(meetingsSection, 4, 0, 1, 2);
+
     contentLayout->addStretch();
     scrollArea->setWidget(content);
 
@@ -211,5 +231,6 @@ AppSettings PreferencesDialog::editedSettings() const
     }();
     edited.handoffDirectory = handoffDirectoryEdit_->text().trimmed();
     edited.handoffTriggerWords = handoffTriggerWordsEdit_->text().trimmed();
+    edited.meetingsDirectory = meetingsDirectoryEdit_->text().trimmed();
     return edited;
 }

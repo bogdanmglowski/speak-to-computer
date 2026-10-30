@@ -76,6 +76,9 @@ QString modelDirectoryPathFor(const QString &currentModelPath)
 
 void ensureDefaults(QSettings *settings)
 {
+    if (!settings->contains(QStringLiteral("meetings_directory"))) {
+        settings->setValue(QStringLiteral("meetings_directory"), QDir(appDataRootPath()).filePath(QStringLiteral("meetings")));
+    }
     if (!settings->contains(QStringLiteral("hotkey_dictate"))) {
         const QString legacyHotkey = settings->value(QStringLiteral("hotkey")).toString().trimmed();
         settings->setValue(QStringLiteral("hotkey_dictate"),
@@ -283,6 +286,8 @@ bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
     settings.setValue(QStringLiteral("output_target"), settingsData.outputTarget.trimmed());
     settings.setValue(QStringLiteral("handoff_directory"), settingsData.handoffDirectory.trimmed());
     settings.setValue(QStringLiteral("handoff_trigger_words"), settingsData.handoffTriggerWords.trimmed());
+    settings.setValue(QStringLiteral("meetings_directory"), settingsData.meetingsDirectory.trimmed().isEmpty()
+            ? QDir(appDataRootPath()).filePath(QStringLiteral("meetings")) : settingsData.meetingsDirectory.trimmed());
     settings.sync();
 
     if (settings.status() == QSettings::NoError) {
@@ -399,6 +404,10 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     result.outputTarget = settings.value(QStringLiteral("output_target")).toString().trimmed();
     result.handoffDirectory = settings.value(QStringLiteral("handoff_directory")).toString().trimmed();
     result.handoffTriggerWords = settings.value(QStringLiteral("handoff_trigger_words")).toString().trimmed();
+    result.meetingsDirectory = expandUserPath(settings.value(QStringLiteral("meetings_directory")).toString().trimmed());
+    if (result.meetingsDirectory.isEmpty()) {
+        result.meetingsDirectory = QDir(appDataRootPath()).filePath(QStringLiteral("meetings"));
+    }
 
     if (result.wakeWordPhrase.isEmpty()) {
         result.wakeWordPhrase = defaultWakeWordPhrase();

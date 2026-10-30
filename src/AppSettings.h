@@ -28,6 +28,7 @@ struct AppSettings {
     QString outputTarget = QStringLiteral("clipboard");
     QString handoffDirectory = QStringLiteral("/tmp/agent");
     QString handoffTriggerWords;
+    QString meetingsDirectory;
 
     static QString expandUserPath(const QString &path);
     static QString modelLabel(const QString &modelPath);

@@ -41,4 +41,5 @@ private:
     QComboBox *outputTargetCombo_ = nullptr;
     QLineEdit *handoffDirectoryEdit_ = nullptr;
     QLineEdit *handoffTriggerWordsEdit_ = nullptr;
+    QLineEdit *meetingsDirectoryEdit_ = nullptr;
 };
