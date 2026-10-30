@@ -18,6 +18,7 @@
   - [Run with logs](#run-with-logs)
   - [Hotkeys and recording flow](#hotkeys-and-recording-flow)
   - [Tray menu](#tray-menu)
+  - [Meeting recordings](#meeting-recordings)
 - [Install autostart](#install-autostart)
   - [Installed binary and sounds](#installed-binary-and-sounds)
   - [Installed wake-word runtime files](#installed-wake-word-runtime-files)
@@ -378,7 +379,29 @@ vad_min_speech_ms=250
 output_target=clipboard
 handoff_directory=/tmp/agent
 handoff_trigger_words=
+meetings_directory=~/.local/share/speak-to-computer/meetings
 ```
+
+### Meeting recordings
+
+Open **Meeting Recordings** from the tray menu, select a microphone and an output
+monitor, then start and stop recording. The monitor captures all audio sent to
+the selected output, not only Jitsi. The microphone is recorded even when it is
+muted in Jitsi. Inform participants that the meeting is being recorded.
+
+Meeting recording requires `ffmpeg` built with PulseAudio input, `pactl`, and a
+running PulseAudio server or PipeWire's PulseAudio compatibility layer. Playback
+also requires `ffplay`. Each meeting is stored in its own directory with a
+two-channel 48 kHz 16-bit FLAC, metadata and, after transcription, a text file.
+The first channel contains the microphone and the second the output monitor.
+The directory is configurable under **Preferences → Meeting Recordings**; changing
+it does not move previously recorded meetings.
+
+Select a recording and choose **Transcribe** to run the configured Whisper model
+locally. The app prepares temporary 16 kHz mono audio and preserves timestamps in
+the transcript. Dictation and meeting processing cannot run concurrently. If a
+recording or transcription is interrupted, its audio is kept for recovery or a
+retry. Speaker identification and meeting summaries are not yet provided.
 
 ### Language mode
 
