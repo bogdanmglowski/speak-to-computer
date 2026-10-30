@@ -1,5 +1,7 @@
 #include "AppSettings.h"
 #include "AudioRecorder.h"
+#include "MeetingDialog.h"
+#include "MeetingStore.h"
 #include "OverlayWidget.h"
 #include "TranscriptCleaner.h"
 #include "VadEndpointDetector.h"
@@ -10,7 +12,12 @@
 #include <QDir>
 #include <QFile>
 #include <QKeyEvent>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QTableWidget>
+#include <QTimer>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
 #include <QtEndian>
@@ -26,6 +33,9 @@ private slots:
     void settingsShouldReturnOnlyExistingModelPaths();
     void settingsShouldSaveModelPath();
     void settingsShouldSaveAndReloadAllEditableFields();
+    void meetingStorageShouldKeepEntriesInConfiguredDirectory();
+    void meetingRecordingAndTranscriptionShouldComplete();
+    void meetingAudioFilterShouldPreserveSeparateChannels();
     void settingsShouldLoadSeparateHotkeyDefaults();
     void settingsShouldMigrateLegacyHotkeyToDictationHotkey();
     void settingsShouldIgnoreTranslateToEnglishAsSavedMode();
@@ -209,6 +219,7 @@ void CoreBehaviorTest::settingsShouldSaveAndReloadAllEditableFields()
     expected.vadMinSpeechMs = 180;
     expected.threads = 6;
     expected.translateToEn = true;
+    expected.meetingsDirectory = dir.filePath(QStringLiteral("meeting archive"));
 
     QString errorMessage;
     QVERIFY2(AppSettings::save(expected, &errorMessage), qPrintable(errorMessage));
@@ -235,6 +246,165 @@ void CoreBehaviorTest::settingsShouldSaveAndReloadAllEditableFields()
     QCOMPARE(actual.vadMinSpeechMs, expected.vadMinSpeechMs);
     QCOMPARE(actual.threads, expected.threads);
     QCOMPARE(actual.translateToEn, false);
+    QCOMPARE(actual.meetingsDirectory, expected.meetingsDirectory);
+}
+
+void CoreBehaviorTest::meetingStorageShouldKeepEntriesInConfiguredDirectory()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const AppSettings defaults = AppSettings::loadFromPath(dir.filePath(QStringLiteral("defaults.ini")));
+    QVERIFY(defaults.meetingsDirectory.endsWith(QStringLiteral("/speak-to-computer/meetings")));
+    const QString root = dir.filePath(QStringLiteral("archive"));
+    MeetingEntry first, second;
+    QString error;
+    QVERIFY2(MeetingStore::create(root, &first, &error), qPrintable(error));
+    QVERIFY2(MeetingStore::create(root, &second, &error), qPrintable(error));
+    QVERIFY(first.directory != second.directory);
+    first.name = QStringLiteral("Review / planning");
+    first.durationSeconds = 3600;
+    first.status = QStringLiteral("Ready");
+    QVERIFY2(MeetingStore::save(first, &error), qPrintable(error));
+    const auto entries = MeetingStore::list(root);
+    QCOMPARE(entries.size(), 2);
+    bool found = false;
+    for (const auto &entry : entries) {
+        if (entry.directory == first.directory) {
+            QCOMPARE(entry.name, first.name);
+            QCOMPARE(entry.durationSeconds, 3600);
+            found = true;
+        }
+    }
+    QVERIFY(found);
+    QVERIFY(MeetingStore::list(dir.filePath(QStringLiteral("other-root"))).isEmpty());
+    QVERIFY(QFileInfo::exists(first.directory));
+}
+
+void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    struct RestorePath { QByteArray path = qgetenv("PATH"); ~RestorePath() { qputenv("PATH", path); } } restorePath;
+    const QByteArray pactl =
+            "#!/bin/sh\n"
+            "case \"$*\" in\n"
+            "  'list short sources') printf '1\\tmic\\tmodule\\n2\\tspeaker.monitor\\tmodule\\n' ;;\n"
+            "  'get-default-source') echo mic ;;\n"
+            "  'get-default-sink') echo speaker ;;\n"
+            "esac\n";
+    const QByteArray ffmpeg =
+            "#!/bin/sh\n"
+            "for arg in \"$@\"; do last=\"$arg\"; done\n"
+            "printf audio > \"$last\"\n"
+            "case \"$*\" in *'-f pulse'*) read line ;; esac\n"
+            "exit 0\n";
+    const QByteArray whisper = "#!/bin/sh\nprintf '[00:00:00.000 --> 00:00:01.000] Hello meeting.\\n'\n";
+    QVERIFY(!createExecutable(&dir, QStringLiteral("pactl"), pactl).isEmpty());
+    QVERIFY(!createExecutable(&dir, QStringLiteral("ffmpeg"), ffmpeg).isEmpty());
+    const QString cli = createExecutable(&dir, QStringLiteral("whisper-cli"), whisper);
+    QVERIFY(!cli.isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + restorePath.path);
+    AppSettings settings;
+    settings.meetingsDirectory = dir.filePath(QStringLiteral("meetings"));
+    settings.whisperCli = cli;
+    settings.model = dir.filePath(QStringLiteral("model.bin"));
+    settings.language = QStringLiteral("en");
+    WhisperRunner runner;
+    MeetingDialog dialog(settings, &runner, []() { return true; });
+    dialog.show();
+    QSignalSpy activitySpy(&dialog, &MeetingDialog::activityChanged);
+    bool sawTranscribingStatus = false;
+    connect(&dialog, &MeetingDialog::busyChanged, &dialog, [&]() {
+        if (dialog.activityStatus() == QStringLiteral("Transcribing meeting.")) sawTranscribingStatus = true;
+    });
+    auto *record = dialog.findChild<QPushButton *>(QStringLiteral("meetingRecord"));
+    auto *stop = dialog.findChild<QPushButton *>(QStringLiteral("meetingStop"));
+    auto *transcribe = dialog.findChild<QPushButton *>(QStringLiteral("meetingTranscribe"));
+    auto *table = dialog.findChild<QTableWidget *>(QStringLiteral("meetingTable"));
+    QVERIFY(record && stop && transcribe && table);
+    QVERIFY(record->isEnabled());
+    record->click();
+    QVERIFY(dialog.isBusy());
+    QVERIFY(dialog.isRecording());
+    QVERIFY(dialog.canStopRecording());
+    QVERIFY(dialog.activityStatus().startsWith(QStringLiteral("Recording meeting — 00:00:")));
+    QTRY_COMPARE_WITH_TIMEOUT(MeetingStore::list(settings.meetingsDirectory).size(), 1, 5000);
+    const MeetingEntry entry = MeetingStore::list(settings.meetingsDirectory).first();
+    QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(MeetingStore::audioPath(entry)).size() > 0, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!activitySpy.isEmpty(), 2000);
+    dialog.stopRecording();
+    QVERIFY(dialog.isRecording());
+    QVERIFY(!dialog.canStopRecording());
+    QCOMPARE(dialog.activityStatus(), QStringLiteral("Finishing meeting recording…"));
+    QTRY_VERIFY_WITH_TIMEOUT(!dialog.isBusy(), 5000);
+    QVERIFY(!dialog.isRecording());
+    table->selectRow(0);
+    QTRY_VERIFY(transcribe->isEnabled());
+    transcribe->click();
+    QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(MeetingStore::transcriptPath(entry)), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!dialog.isBusy(), 5000);
+    QVERIFY(sawTranscribingStatus);
+    QFile transcript(MeetingStore::transcriptPath(entry));
+    QVERIFY(transcript.open(QIODevice::ReadOnly));
+    QCOMPARE(transcript.readAll(), QByteArray("[00:00:00.000 --> 00:00:01.000] Hello meeting.\n"));
+    QCOMPARE(MeetingStore::list(settings.meetingsDirectory).first().status, QStringLiteral("Ready"));
+
+    const QByteArray brokenFfmpeg = "#!/bin/sh\necho 'synthetic failure' >&2\nexit 1\n";
+    QVERIFY(!createExecutable(&dir, QStringLiteral("ffmpeg"), brokenFfmpeg).isEmpty());
+    QTimer closer;
+    connect(&closer, &QTimer::timeout, []() {
+        for (QWidget *widget : QApplication::topLevelWidgets()) {
+            if (auto *box = qobject_cast<QMessageBox *>(widget)) box->accept();
+        }
+    });
+    closer.start(20);
+    table->selectRow(0);
+    transcribe->click();
+    QTRY_COMPARE_WITH_TIMEOUT(MeetingStore::list(settings.meetingsDirectory).first().status,
+            QStringLiteral("Transcription failed"), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!dialog.isBusy(), 5000);
+    QVERIFY(QFileInfo::exists(MeetingStore::audioPath(entry)));
+    QFile previousTranscript(MeetingStore::transcriptPath(entry));
+    QVERIFY(previousTranscript.open(QIODevice::ReadOnly));
+    QCOMPARE(previousTranscript.readAll(), QByteArray("[00:00:00.000 --> 00:00:01.000] Hello meeting.\n"));
+
+    const QByteArray interruptedFfmpeg =
+            "#!/bin/sh\nfor arg in \"$@\"; do last=\"$arg\"; done\nprintf partial > \"$last\"\n"
+            "echo 'audio source disconnected' >&2\nexit 1\n";
+    QVERIFY(!createExecutable(&dir, QStringLiteral("ffmpeg"), interruptedFfmpeg).isEmpty());
+    record->click();
+    QTRY_COMPARE_WITH_TIMEOUT(MeetingStore::list(settings.meetingsDirectory).size(), 2, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!dialog.isBusy(), 5000);
+    bool interruptedFound = false;
+    for (const auto &saved : MeetingStore::list(settings.meetingsDirectory)) {
+        if (saved.status == QStringLiteral("Recording interrupted")) {
+            interruptedFound = true;
+            QFile partial(MeetingStore::audioPath(saved));
+            QVERIFY(partial.open(QIODevice::ReadOnly));
+            QCOMPARE(partial.readAll(), QByteArray("partial"));
+        }
+    }
+    QVERIFY(interruptedFound);
+}
+
+void CoreBehaviorTest::meetingAudioFilterShouldPreserveSeparateChannels()
+{
+    if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) QSKIP("FFmpeg is not installed");
+    QProcess ffmpeg;
+    const QString filter = QStringLiteral("[0:a]aresample=48000:async=1:first_pts=0,aformat=sample_fmts=s16:channel_layouts=mono[m];[1:a]aresample=48000:async=1:first_pts=0,aformat=sample_fmts=s16:channel_layouts=mono[o];[m][o]amerge=inputs=2[out]");
+    ffmpeg.start(QStringLiteral("ffmpeg"), {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"),
+            QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"), QStringLiteral("sine=frequency=440:sample_rate=48000:duration=0.1"),
+            QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"), QStringLiteral("sine=frequency=880:sample_rate=48000:duration=0.1"),
+            QStringLiteral("-filter_complex"), filter, QStringLiteral("-map"), QStringLiteral("[out]"),
+            QStringLiteral("-c:a"), QStringLiteral("pcm_s16le"), QStringLiteral("-f"), QStringLiteral("s16le"), QStringLiteral("-")});
+    QVERIFY(ffmpeg.waitForFinished(5000));
+    QCOMPARE(ffmpeg.exitCode(), 0);
+    const QByteArray samples = ffmpeg.readAllStandardOutput();
+    QVERIFY(samples.size() >= 400);
+    const uchar *data = reinterpret_cast<const uchar *>(samples.constData());
+    const int16_t left = qFromLittleEndian<int16_t>(data + 24 * 4);
+    const int16_t right = qFromLittleEndian<int16_t>(data + 24 * 4 + 2);
+    QVERIFY(left != right);
 }
 
 void CoreBehaviorTest::settingsShouldLoadSeparateHotkeyDefaults()
