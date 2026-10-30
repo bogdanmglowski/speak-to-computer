@@ -12,6 +12,7 @@
 #include <QDir>
 #include <QFile>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTableWidget>
@@ -320,9 +321,23 @@ void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()
     auto *record = dialog.findChild<QPushButton *>(QStringLiteral("meetingRecord"));
     auto *stop = dialog.findChild<QPushButton *>(QStringLiteral("meetingStop"));
     auto *transcribe = dialog.findChild<QPushButton *>(QStringLiteral("meetingTranscribe"));
+    auto *hideToTray = dialog.findChild<QPushButton *>(QStringLiteral("meetingHideToTray"));
+    auto *closeWindow = dialog.findChild<QPushButton *>(QStringLiteral("meetingCloseWindow"));
     auto *table = dialog.findChild<QTableWidget *>(QStringLiteral("meetingTable"));
-    QVERIFY(record && stop && transcribe && table);
+    auto *recordingIndicator = dialog.findChild<QLabel *>(QStringLiteral("meetingRecordingIndicator"));
+    auto *headerTitle = dialog.findChild<QLabel *>(QStringLiteral("meetingHeaderTitle"));
+    auto *detailsTitle = dialog.findChild<QLabel *>(QStringLiteral("meetingDetailsTitle"));
+    auto *detailsStatus = dialog.findChild<QLabel *>(QStringLiteral("meetingDetailsStatus"));
+    auto *detailsLocation = dialog.findChild<QLabel *>(QStringLiteral("meetingDetailsLocation"));
+    auto *detailsStarted = dialog.findChild<QLabel *>(QStringLiteral("meetingDetailsStarted"));
+    auto *detailsDuration = dialog.findChild<QLabel *>(QStringLiteral("meetingDetailsDuration"));
+    auto *filesTable = dialog.findChild<QTableWidget *>(QStringLiteral("meetingFilesTable"));
+    QVERIFY(record && stop && transcribe && hideToTray && closeWindow && table);
+    QVERIFY(recordingIndicator && headerTitle && detailsTitle && detailsStatus && detailsLocation && detailsStarted && detailsDuration && filesTable);
+    QVERIFY(!headerTitle->font().bold());
     QVERIFY(table->columnWidth(0) <= 220);
+    QVERIFY(dialog.width() >= 1100);
+    QVERIFY(dialog.height() >= 650);
     QVERIFY(record->isEnabled());
     record->click();
     QVERIFY(dialog.isBusy());
@@ -333,12 +348,42 @@ void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()
     const MeetingEntry entry = MeetingStore::list(settings.meetingsDirectory).first();
     QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(MeetingStore::audioPath(entry)).size() > 0, 5000);
     QTRY_VERIFY_WITH_TIMEOUT(!activitySpy.isEmpty(), 2000);
+    table->selectRow(0);
+    QCOMPARE(detailsTitle->text(), entry.name);
+    QCOMPARE(detailsStatus->text(), QStringLiteral("Recording"));
+    QTRY_COMPARE(detailsLocation->text(), entry.directory);
+    QVERIFY(detailsStarted->text() != QStringLiteral("—"));
+    QVERIFY(detailsDuration->text().contains(QLatin1Char(':')));
+    QVERIFY(recordingIndicator->isVisible());
+    QVERIFY(recordingIndicator->text().contains(QStringLiteral("REC")));
+    QCOMPARE(filesTable->columnCount(), 3);
+    QTRY_VERIFY([&]() {
+        for (int row = 0; row < filesTable->rowCount(); ++row) {
+            const auto *name = filesTable->item(row, 0);
+            const auto *size = filesTable->item(row, 1);
+            const auto *modified = filesTable->item(row, 2);
+            if (name && name->text() == QStringLiteral("audio.flac"))
+                return size && !size->text().isEmpty() && modified && !modified->text().isEmpty();
+        }
+        return false;
+    }());
+    hideToTray->click();
+    QVERIFY(dialog.isHidden());
+    QVERIFY(dialog.isRecording());
+    dialog.show();
+    QVERIFY(recordingIndicator->isVisible());
+    closeWindow->click();
+    QVERIFY(dialog.isHidden());
+    QVERIFY(dialog.isRecording());
+    dialog.show();
+    QVERIFY(recordingIndicator->isVisible());
     dialog.stopRecording();
     QVERIFY(dialog.isRecording());
     QVERIFY(!dialog.canStopRecording());
     QCOMPARE(dialog.activityStatus(), QStringLiteral("Finishing meeting recording…"));
     QTRY_VERIFY_WITH_TIMEOUT(!dialog.isBusy(), 5000);
     QVERIFY(!dialog.isRecording());
+    QVERIFY(!recordingIndicator->isVisible());
     table->selectRow(0);
     QTRY_VERIFY(transcribe->isEnabled());
     transcribe->click();

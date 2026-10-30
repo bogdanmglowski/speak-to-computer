@@ -388,6 +388,9 @@ Open **Meeting Recordings** from the tray menu, select a microphone and an outpu
 monitor, then start and stop recording. The monitor captures all audio sent to
 the selected output, not only Jitsi. The microphone is recorded even when it is
 muted in Jitsi. Inform participants that the meeting is being recorded.
+Closing the window hides it to the tray without stopping an active recording;
+the tray icon stays marked while recording, and the window can be reopened from
+**Meeting Recordings** or stopped using the tray's **Stop meeting recording** action.
 
 Meeting recording requires `ffmpeg` built with PulseAudio input, `pactl`, and a
 running PulseAudio server or PipeWire's PulseAudio compatibility layer. Playback

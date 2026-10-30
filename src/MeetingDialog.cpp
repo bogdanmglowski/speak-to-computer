@@ -1,6 +1,7 @@
 #include "MeetingDialog.h"
 
 #include <QApplication>
+#include <QCloseEvent>
 #include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
@@ -9,7 +10,12 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFormLayout>
+#include <QFrame>
+#include <QFont>
 #include <QGridLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QLabel>
@@ -17,6 +23,7 @@
 #include <QPushButton>
 #include <QSaveFile>
 #include <QShowEvent>
+#include <QSplitter>
 #include <QStandardPaths>
 #include <QTableWidget>
 #include <QTimer>
@@ -41,15 +48,57 @@ QString duration(qint64 seconds)
     return QStringLiteral("%1:%2:%3").arg(seconds / 3600, 2, 10, QLatin1Char('0'))
             .arg((seconds / 60) % 60, 2, 10, QLatin1Char('0')).arg(seconds % 60, 2, 10, QLatin1Char('0'));
 }
+QString fileSize(qint64 bytes)
+{
+    if (bytes < 1024) return QStringLiteral("%1 B").arg(bytes);
+    static const QStringList units{QStringLiteral("KiB"), QStringLiteral("MiB"), QStringLiteral("GiB"), QStringLiteral("TiB")};
+    double size = static_cast<double>(bytes);
+    int unit = -1;
+    do {
+        size /= 1024.0;
+        ++unit;
+    } while (size >= 1024.0 && unit + 1 < units.size());
+    return QStringLiteral("%1 %2").arg(QString::number(size, 'f', 1), units[unit]);
+}
 }
 
 MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper, std::function<bool()> appIdle, QWidget *parent)
     : QDialog(parent), settings_(settings), whisper_(whisper), appIdle_(std::move(appIdle))
 {
     setWindowTitle(QStringLiteral("Meeting Recordings"));
-    resize(900, 480);
+    resize(1180, 740);
+    setMinimumSize(1040, 640);
+    setAttribute(Qt::WA_DeleteOnClose, false);
     auto *layout = new QVBoxLayout(this);
-    auto *devices = new QGridLayout;
+    layout->setContentsMargins(20, 18, 20, 16);
+    layout->setSpacing(12);
+
+    auto *header = new QHBoxLayout;
+    auto *title = new QLabel(QStringLiteral("Meeting Recordings"), this);
+    title->setObjectName(QStringLiteral("meetingHeaderTitle"));
+    QFont titleFont = title->font();
+    titleFont.setPointSize(titleFont.pointSize() + 2);
+    titleFont.setBold(false);
+    title->setFont(titleFont);
+    header->addWidget(title);
+    header->addStretch();
+    recordingIndicator_ = new QLabel(this);
+    recordingIndicator_->setObjectName(QStringLiteral("meetingRecordingIndicator"));
+    recordingIndicator_->setAccessibleName(QStringLiteral("Meeting recording indicator"));
+    recordingIndicator_->setAlignment(Qt::AlignCenter);
+    recordingIndicator_->setStyleSheet(QStringLiteral(
+            "QLabel { color: #991b1b; background: #fee2e2; border: 1px solid #fecaca; "
+            "border-radius: 10px; padding: 7px 12px; font-weight: 700; }"));
+    recordingIndicator_->hide();
+    header->addWidget(recordingIndicator_, 0, Qt::AlignTop);
+    auto *hideToTray = new QPushButton(QStringLiteral("Hide to tray"), this);
+    hideToTray->setObjectName(QStringLiteral("meetingHideToTray"));
+    hideToTray->setToolTip(QStringLiteral("Hide this window; recording continues in the tray."));
+    header->addWidget(hideToTray, 0, Qt::AlignTop);
+    layout->addLayout(header);
+
+    auto *devicesGroup = new QGroupBox(QStringLiteral("Audio sources"), this);
+    auto *devices = new QGridLayout(devicesGroup);
     microphone_ = new QComboBox(this);
     output_ = new QComboBox(this);
     auto *refreshDevices = new QPushButton(QStringLiteral("Refresh devices"), this);
@@ -58,20 +107,94 @@ MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper
     devices->addWidget(new QLabel(QStringLiteral("Output monitor"), this), 1, 0);
     devices->addWidget(output_, 1, 1);
     devices->addWidget(refreshDevices, 0, 2, 2, 1);
-    layout->addLayout(devices);
+    layout->addWidget(devicesGroup);
     auto *note = new QLabel(QStringLiteral("Records the microphone and all sound played through the selected output. Muting Jitsi does not mute this microphone recording."), this);
     note->setWordWrap(true);
+    note->setStyleSheet(QStringLiteral("color: palette(mid); padding: 0 2px;"));
     layout->addWidget(note);
-    table_ = new QTableWidget(0, 4, this);
+
+    auto *splitter = new QSplitter(Qt::Horizontal, this);
+    auto *recordsPane = new QWidget(splitter);
+    auto *recordsLayout = new QVBoxLayout(recordsPane);
+    recordsLayout->setContentsMargins(0, 0, 8, 0);
+    auto *recordsHeading = new QLabel(QStringLiteral("Recordings"), recordsPane);
+    QFont sectionFont = recordsHeading->font();
+    sectionFont.setBold(true);
+    recordsHeading->setFont(sectionFont);
+    recordsLayout->addWidget(recordsHeading);
+    table_ = new QTableWidget(0, 4, recordsPane);
     table_->setObjectName(QStringLiteral("meetingTable"));
     table_->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Date"), QStringLiteral("Duration"), QStringLiteral("Status")});
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Interactive);
+    table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setStretchLastSection(true);
     table_->setColumnWidth(0, 180);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    layout->addWidget(table_);
+    table_->setAlternatingRowColors(true);
+    table_->verticalHeader()->hide();
+    recordsLayout->addWidget(table_);
+
+    auto *detailsPane = new QFrame(splitter);
+    detailsPane->setFrameShape(QFrame::StyledPanel);
+    auto *detailsLayout = new QVBoxLayout(detailsPane);
+    detailsLayout->setContentsMargins(16, 14, 16, 14);
+    detailsLayout->setSpacing(10);
+    auto *detailsHeading = new QLabel(QStringLiteral("Selected recording"), detailsPane);
+    detailsHeading->setStyleSheet(QStringLiteral("color: palette(mid);"));
+    detailsLayout->addWidget(detailsHeading);
+    detailsTitle_ = new QLabel(QStringLiteral("Select a recording"), detailsPane);
+    detailsTitle_->setObjectName(QStringLiteral("meetingDetailsTitle"));
+    detailsTitle_->setWordWrap(true);
+    QFont detailsTitleFont = detailsTitle_->font();
+    detailsTitleFont.setPointSize(detailsTitleFont.pointSize() + 2);
+    detailsTitleFont.setBold(true);
+    detailsTitle_->setFont(detailsTitleFont);
+    detailsLayout->addWidget(detailsTitle_);
+    detailsStatus_ = new QLabel(QStringLiteral("No recording selected"), detailsPane);
+    detailsStatus_->setObjectName(QStringLiteral("meetingDetailsStatus"));
+    detailsLayout->addWidget(detailsStatus_);
+
+    auto *metadata = new QGroupBox(QStringLiteral("Details"), detailsPane);
+    auto *metadataLayout = new QFormLayout(metadata);
+    detailsStarted_ = new QLabel(QStringLiteral("—"), metadata);
+    detailsStarted_->setObjectName(QStringLiteral("meetingDetailsStarted"));
+    detailsDuration_ = new QLabel(QStringLiteral("—"), metadata);
+    detailsDuration_->setObjectName(QStringLiteral("meetingDetailsDuration"));
+    detailsLocation_ = new QLabel(QStringLiteral("—"), metadata);
+    detailsLocation_->setObjectName(QStringLiteral("meetingDetailsLocation"));
+    detailsLocation_->setWordWrap(true);
+    detailsLocation_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    metadataLayout->addRow(QStringLiteral("Started"), detailsStarted_);
+    metadataLayout->addRow(QStringLiteral("Duration"), detailsDuration_);
+    metadataLayout->addRow(QStringLiteral("Folder"), detailsLocation_);
+    detailsLayout->addWidget(metadata);
+
+    auto *filesHeading = new QLabel(QStringLiteral("Files"), detailsPane);
+    filesHeading->setFont(sectionFont);
+    detailsLayout->addWidget(filesHeading);
+    filesTable_ = new QTableWidget(0, 3, detailsPane);
+    filesTable_->setObjectName(QStringLiteral("meetingFilesTable"));
+    filesTable_->setHorizontalHeaderLabels({QStringLiteral("File"), QStringLiteral("Size"), QStringLiteral("Modified")});
+    filesTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    filesTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    filesTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    filesTable_->verticalHeader()->hide();
+    filesTable_->setSelectionMode(QAbstractItemView::NoSelection);
+    filesTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    filesTable_->setAlternatingRowColors(true);
+    filesTable_->setMinimumHeight(150);
+    detailsLayout->addWidget(filesTable_, 1);
+    splitter->addWidget(recordsPane);
+    splitter->addWidget(detailsPane);
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 2);
+    splitter->setSizes({680, 430});
+    layout->addWidget(splitter, 1);
+
     auto *buttons = new QGridLayout;
     record_ = new QPushButton(QStringLiteral("Start recording"), this);
     record_->setObjectName(QStringLiteral("meetingRecord"));
@@ -85,7 +208,10 @@ MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper
     copy_ = new QPushButton(QStringLiteral("Copy transcript"), this);
     rename_ = new QPushButton(QStringLiteral("Rename"), this);
     remove_ = new QPushButton(QStringLiteral("Delete"), this);
-    const QList<QPushButton *> all{record_, stop_, transcribe_, play_, open_, transcript_, copy_, rename_, remove_};
+    auto *closeWindow = new QPushButton(QStringLiteral("Close window"), this);
+    closeWindow->setObjectName(QStringLiteral("meetingCloseWindow"));
+    closeWindow->setToolTip(QStringLiteral("Hide this window without stopping an active recording."));
+    const QList<QPushButton *> all{record_, stop_, transcribe_, play_, open_, transcript_, copy_, rename_, remove_, closeWindow};
     for (int i = 0; i < all.size(); ++i) buttons->addWidget(all[i], i / 5, i % 5);
     layout->addLayout(buttons);
     status_ = new QLabel(this);
@@ -95,7 +221,12 @@ MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper
     connect(record_, &QPushButton::clicked, this, &MeetingDialog::startRecording);
     connect(stop_, &QPushButton::clicked, this, &MeetingDialog::stopRecording);
     connect(transcribe_, &QPushButton::clicked, this, &MeetingDialog::startTranscription);
-    connect(table_, &QTableWidget::itemSelectionChanged, this, &MeetingDialog::updateButtons);
+    connect(hideToTray, &QPushButton::clicked, this, &QWidget::close);
+    connect(closeWindow, &QPushButton::clicked, this, &QWidget::close);
+    connect(table_, &QTableWidget::itemSelectionChanged, this, [this]() {
+        updateButtons();
+        updateDetails();
+    });
     connect(microphone_, &QComboBox::currentIndexChanged, this, &MeetingDialog::updateButtons);
     connect(output_, &QComboBox::currentIndexChanged, this, &MeetingDialog::updateButtons);
     connect(play_, &QPushButton::clicked, this, [this]() {
@@ -136,6 +267,8 @@ MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper
             status_->setText(QStringLiteral("Recording %1").arg(duration(elapsed_.elapsed() / 1000)));
             emit activityChanged();
         }
+        updateRecordingIndicator();
+        updateDetails();
         updateButtons();
     });
     timer->start(1000);
@@ -146,6 +279,12 @@ void MeetingDialog::showEvent(QShowEvent *event)
 {
     QDialog::showEvent(event);
     if (!sourcesLoaded_) loadSources();
+}
+
+void MeetingDialog::closeEvent(QCloseEvent *event)
+{
+    hide();
+    event->accept();
 }
 
 MeetingDialog::~MeetingDialog()
@@ -176,7 +315,14 @@ QString MeetingDialog::activityStatus() const
     if (job_ == Job::Converting || job_ == Job::Whisper) return QStringLiteral("Transcribing meeting.");
     return {};
 }
-void MeetingDialog::setJob(Job job) { job_ = job; updateButtons(); emit busyChanged(); }
+void MeetingDialog::setJob(Job job)
+{
+    job_ = job;
+    updateButtons();
+    updateDetails();
+    updateRecordingIndicator();
+    emit busyChanged();
+}
 void MeetingDialog::report(const QString &message) {
     status_->setText(message);
     if (shuttingDown_) qWarning().noquote() << message;
@@ -233,6 +379,7 @@ void MeetingDialog::refresh()
         if (entry.directory == selected) table_->selectRow(i);
     }
     updateButtons();
+    updateDetails();
 }
 
 void MeetingDialog::updateButtons()
@@ -252,6 +399,72 @@ void MeetingDialog::updateButtons()
     rename_->setEnabled(!isBusy() && selected);
     remove_->setEnabled(!isBusy() && selected);
     microphone_->setEnabled(!isBusy()); output_->setEnabled(!isBusy());
+}
+
+void MeetingDialog::updateDetails()
+{
+    const MeetingEntry entry = selectedEntry();
+    if (entry.directory.isEmpty()) {
+        detailsTitle_->setText(QStringLiteral("Select a recording"));
+        detailsStatus_->setText(QStringLiteral("No recording selected"));
+        detailsLocation_->setText(QStringLiteral("—"));
+        detailsStarted_->setText(QStringLiteral("—"));
+        detailsDuration_->setText(QStringLiteral("—"));
+        filesTable_->setRowCount(0);
+        return;
+    }
+
+    QString state = entry.status;
+    if (state == QStringLiteral("Recording") && (job_ != Job::Recording || current_.directory != entry.directory)) {
+        state = QStringLiteral("Interrupted");
+    } else if (state == QStringLiteral("Transcribing")
+            && ((job_ != Job::Converting && job_ != Job::Whisper) || current_.directory != entry.directory)) {
+        state = QStringLiteral("Transcription interrupted");
+    } else if (QFileInfo::exists(MeetingStore::transcriptPath(entry)) && state == QStringLiteral("Ready")) {
+        state = QStringLiteral("Transcribed");
+    }
+
+    detailsTitle_->setText(entry.name);
+    detailsStatus_->setText(state);
+    if (state == QStringLiteral("Recording") || state == QStringLiteral("Interrupted")
+            || state == QStringLiteral("Recording interrupted")) {
+        detailsStatus_->setStyleSheet(QStringLiteral("color: #b91c1c; font-weight: 700;"));
+    } else if (state == QStringLiteral("Transcribing")) {
+        detailsStatus_->setStyleSheet(QStringLiteral("color: #1d4ed8; font-weight: 700;"));
+    } else {
+        detailsStatus_->setStyleSheet(QStringLiteral("color: palette(text); font-weight: 600;"));
+    }
+    detailsLocation_->setText(entry.directory);
+    detailsStarted_->setText(entry.started.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+    const qint64 seconds = isRecording() && current_.directory == entry.directory
+            ? elapsed_.elapsed() / 1000 : entry.durationSeconds;
+    detailsDuration_->setText(duration(seconds));
+
+    const QFileInfoList files = QDir(entry.directory).entryInfoList(
+            QDir::Files | QDir::Hidden | QDir::NoSymLinks, QDir::Name);
+    filesTable_->setRowCount(files.size());
+    for (int row = 0; row < files.size(); ++row) {
+        const QFileInfo &file = files[row];
+        auto *name = new QTableWidgetItem(file.fileName());
+        auto *size = new QTableWidgetItem(fileSize(file.size()));
+        auto *modified = new QTableWidgetItem(file.lastModified().toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+        size->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        filesTable_->setItem(row, 0, name);
+        filesTable_->setItem(row, 1, size);
+        filesTable_->setItem(row, 2, modified);
+    }
+}
+
+void MeetingDialog::updateRecordingIndicator()
+{
+    if (!isRecording()) {
+        recordingIndicator_->hide();
+        return;
+    }
+    const QString state = stopping_ ? QStringLiteral("Finishing") : duration(elapsed_.elapsed() / 1000);
+    recordingIndicator_->setText(QStringLiteral("● REC · %1").arg(state));
+    recordingIndicator_->setAccessibleDescription(QStringLiteral("Meeting recording active: %1").arg(state));
+    recordingIndicator_->show();
 }
 
 bool MeetingDialog::saveEntry(const MeetingEntry &entry)
@@ -286,6 +499,8 @@ void MeetingDialog::stopRecording()
     if (job_ != Job::Recording || stopping_) return;
     stopping_ = true;
     status_->setText(QStringLiteral("Finishing recording…"));
+    updateRecordingIndicator();
+    updateDetails();
     emit activityChanged();
     if (process_.state() == QProcess::Starting) {
         connect(&process_, &QProcess::started, this, [this]() {

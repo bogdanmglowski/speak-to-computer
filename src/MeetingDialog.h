@@ -10,6 +10,7 @@
 #include <functional>
 
 class QComboBox;
+class QCloseEvent;
 class QLabel;
 class QPushButton;
 class QTableWidget;
@@ -36,6 +37,7 @@ signals:
 
 protected:
     void showEvent(QShowEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
 
 private:
     enum class Job { None, Recording, Converting, Whisper };
@@ -47,6 +49,8 @@ private:
     void finishWhisper(const QString &text, const QString &error);
     void setJob(Job job);
     void updateButtons();
+    void updateDetails();
+    void updateRecordingIndicator();
     void report(const QString &message);
     MeetingEntry selectedEntry() const;
     bool saveEntry(const MeetingEntry &entry);
@@ -68,6 +72,13 @@ private:
     QComboBox *microphone_ = nullptr;
     QComboBox *output_ = nullptr;
     QTableWidget *table_ = nullptr;
+    QTableWidget *filesTable_ = nullptr;
+    QLabel *recordingIndicator_ = nullptr;
+    QLabel *detailsTitle_ = nullptr;
+    QLabel *detailsStatus_ = nullptr;
+    QLabel *detailsLocation_ = nullptr;
+    QLabel *detailsStarted_ = nullptr;
+    QLabel *detailsDuration_ = nullptr;
     QLabel *status_ = nullptr;
     QPushButton *record_ = nullptr;
     QPushButton *stop_ = nullptr;
