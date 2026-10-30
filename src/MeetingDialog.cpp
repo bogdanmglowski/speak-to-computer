@@ -65,7 +65,9 @@ MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper
     table_ = new QTableWidget(0, 4, this);
     table_->setObjectName(QStringLiteral("meetingTable"));
     table_->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Date"), QStringLiteral("Duration"), QStringLiteral("Status")});
-    table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Interactive);
+    table_->horizontalHeader()->setStretchLastSection(true);
+    table_->setColumnWidth(0, 180);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);

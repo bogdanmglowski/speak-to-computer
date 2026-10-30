@@ -322,6 +322,7 @@ void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()
     auto *transcribe = dialog.findChild<QPushButton *>(QStringLiteral("meetingTranscribe"));
     auto *table = dialog.findChild<QTableWidget *>(QStringLiteral("meetingTable"));
     QVERIFY(record && stop && transcribe && table);
+    QVERIFY(table->columnWidth(0) <= 220);
     QVERIFY(record->isEnabled());
     record->click();
     QVERIFY(dialog.isBusy());
