@@ -35,6 +35,10 @@ add_executable(speak-to-computer
     src/WavWriter.h
     src/WhisperRunner.cpp
     src/WhisperRunner.h
+    src/MeetingStore.cpp
+    src/MeetingStore.h
+    src/MeetingDialog.cpp
+    src/MeetingDialog.h
     src/WakeWordListener.cpp
     src/WakeWordListener.h
     src/X11Hotkey.cpp
@@ -105,6 +109,10 @@ if(BUILD_TESTING)
         src/WavWriter.h
         src/WhisperRunner.cpp
         src/WhisperRunner.h
+        src/MeetingStore.cpp
+        src/MeetingStore.h
+        src/MeetingDialog.cpp
+        src/MeetingDialog.h
         tests/CoreBehaviorTest.cpp
     )
 
