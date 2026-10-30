@@ -1,6 +1,7 @@
 #include "SpeakToComputerApp.h"
 
 #include "PreferencesDialog.h"
+#include "MeetingDialog.h"
 #include "WebRtcVad.h"
 #include "WavWriter.h"
 
@@ -25,7 +26,7 @@
 
 namespace {
 
-QIcon createApplicationIcon()
+QIcon createApplicationIcon(const QColor &statusColor = QColor())
 {
     QIcon icon;
     for (const int size : {16, 24, 32, 48, 64, 128}) {
@@ -52,6 +53,12 @@ QIcon createApplicationIcon()
         painter.setPen(QPen(QColor(22, 24, 28), 3.0 * unit, Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(QPointF(29.0 * unit, 21.0 * unit), QPointF(35.0 * unit, 21.0 * unit));
         painter.drawLine(QPointF(29.0 * unit, 28.0 * unit), QPointF(35.0 * unit, 28.0 * unit));
+
+        if (statusColor.isValid()) {
+            painter.setPen(QPen(QColor(255, 255, 255), 3.0 * unit));
+            painter.setBrush(statusColor);
+            painter.drawEllipse(QPointF(48.0 * unit, 48.0 * unit), 9.0 * unit, 9.0 * unit);
+        }
 
         icon.addPixmap(pixmap);
     }
@@ -81,6 +88,9 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     : QObject(parent)
     , settings_(settings)
 {
+    meetingDialog_ = std::make_unique<MeetingDialog>(settings_, &whisper_, [this]() { return state_ == State::Idle; });
+    connect(meetingDialog_.get(), &MeetingDialog::busyChanged, this, [this]() { updateWakeWordListening(); });
+    connect(meetingDialog_.get(), &MeetingDialog::activityChanged, this, &SpeakToComputerApp::updateTrayStatus);
     connect(&dictateHotkey_, &X11Hotkey::activated, this, [this]() {
         handleHotkey(OutputMode::Original, dictateHotkey_);
     });
@@ -132,6 +142,12 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     setupTrayIcon();
 }
 
+SpeakToComputerApp::~SpeakToComputerApp()
+{
+    disconnect(meetingDialog_.get(), nullptr, this, nullptr);
+    meetingDialog_.reset();
+}
+
 bool SpeakToComputerApp::start()
 {
     QString errorMessage;
@@ -169,6 +185,10 @@ bool SpeakToComputerApp::start()
 
 void SpeakToComputerApp::handleHotkey(OutputMode outputMode, const X11Hotkey &sourceHotkey)
 {
+    if (meetingDialog_->isBusy()) {
+        overlay_.showError(QStringLiteral("Meeting recording or transcription is in progress."), QStringLiteral("Meeting Recordings"));
+        return;
+    }
     if (hotkeyDebounce_.isValid() && hotkeyDebounce_.elapsed() < 500) {
         return;
     }
@@ -288,6 +308,7 @@ void SpeakToComputerApp::cancelRecording()
 
 void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
 {
+    if (state_ != State::Transcribing) return;
     removeCurrentWav();
 
     if (text.isEmpty()) {
@@ -356,6 +377,7 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
 
 void SpeakToComputerApp::handleTranscriptionFailed(const QString &message)
 {
+    if (state_ != State::Transcribing) return;
     const QString fallbackPath = fallbackModelPathForInitializationFailure();
     const bool shouldOfferFallback =
             message.contains(QStringLiteral("failed to initialize whisper context"), Qt::CaseInsensitive)
@@ -397,7 +419,7 @@ void SpeakToComputerApp::handleModelSelected(const QString &modelPath)
 
 void SpeakToComputerApp::showPreferences()
 {
-    if (state_ != State::Idle) {
+    if (state_ != State::Idle || meetingDialog_->isBusy()) {
         overlay_.showError(QStringLiteral("Preferences can only be changed while the app is idle."),
                 QStringLiteral("Preferences"));
         return;
@@ -431,7 +453,7 @@ void SpeakToComputerApp::showPreferences()
 
 void SpeakToComputerApp::handleWakeWordDetected()
 {
-    if (state_ != State::Idle || !settings_.wakeWordEnabled || !wakeWordAvailable_) {
+    if (state_ != State::Idle || meetingDialog_->isBusy() || !settings_.wakeWordEnabled || !wakeWordAvailable_) {
         return;
     }
 
@@ -513,7 +535,7 @@ void SpeakToComputerApp::handleVadPresetSelected(bool enabled, int endSilenceMs)
 
 void SpeakToComputerApp::updateWakeWordListening()
 {
-    if (state_ != State::Idle || !settings_.wakeWordEnabled || !wakeWordAvailable_) {
+    if (state_ != State::Idle || meetingDialog_->isBusy() || !settings_.wakeWordEnabled || !wakeWordAvailable_) {
         stopWakeWordListening();
         updateTrayStatus();
         return;
@@ -727,6 +749,7 @@ bool SpeakToComputerApp::applySettings(const AppSettings &newSettings, QString *
     }
 
     settings_ = AppSettings::loadFromPath(newSettings.settingsPath);
+    meetingDialog_->setSettings(settings_);
     wakeWordAvailable_ = true;
     trayStatusOverride_.clear();
     overlay_.setModelLabel(AppSettings::modelLabel(settings_.model));
@@ -823,6 +846,7 @@ QString SpeakToComputerApp::nextWavPath() const
 
 QString SpeakToComputerApp::trayStatusText() const
 {
+    if (meetingDialog_ && meetingDialog_->isBusy()) return meetingDialog_->activityStatus();
     if (!trayStatusOverride_.isEmpty()) {
         return trayStatusOverride_;
     }
@@ -859,14 +883,25 @@ QString SpeakToComputerApp::trayStatusText() const
 
 void SpeakToComputerApp::setupTrayIcon()
 {
-    const QIcon icon = createApplicationIcon();
-    QApplication::setWindowIcon(icon);
-    overlay_.setWindowIcon(icon);
+    idleTrayIcon_ = createApplicationIcon();
+    recordingTrayIcon_ = createApplicationIcon(QColor(220, 25, 40));
+    transcribingTrayIcon_ = createApplicationIcon(QColor(35, 115, 220));
+    QApplication::setWindowIcon(idleTrayIcon_);
+    overlay_.setWindowIcon(idleTrayIcon_);
 
     trayStatusAction_ = trayMenu_.addAction(trayStatusText());
     trayStatusAction_->setEnabled(false);
     trayPreferencesAction_ = trayMenu_.addAction(QStringLiteral("Preferences"));
     connect(trayPreferencesAction_, &QAction::triggered, this, &SpeakToComputerApp::showPreferences);
+    QAction *meetingsAction = trayMenu_.addAction(QStringLiteral("Meeting Recordings"));
+    connect(meetingsAction, &QAction::triggered, this, [this]() {
+        meetingDialog_->refresh();
+        meetingDialog_->show();
+        meetingDialog_->raise();
+        meetingDialog_->activateWindow();
+    });
+    trayStopMeetingAction_ = trayMenu_.addAction(QStringLiteral("Stop meeting recording"));
+    connect(trayStopMeetingAction_, &QAction::triggered, meetingDialog_.get(), &MeetingDialog::stopRecording);
     trayWakeWordAction_ = trayMenu_.addAction(QStringLiteral("Wake Word Listening"));
     trayWakeWordAction_->setCheckable(true);
     trayWakeWordAction_->setChecked(settings_.wakeWordEnabled);
@@ -879,8 +914,8 @@ void SpeakToComputerApp::setupTrayIcon()
     trayQuitAction_ = trayMenu_.addAction(QStringLiteral("Quit"));
     connect(trayQuitAction_, &QAction::triggered, this, &SpeakToComputerApp::quitApplication);
 
-    trayIcon_.setIcon(icon);
     trayIcon_.setContextMenu(&trayMenu_);
+    updateTrayStatus();
     trayIcon_.show();
 
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -925,6 +960,15 @@ void SpeakToComputerApp::updateTrayStatus()
     const QString status = trayStatusText();
     if (trayStatusAction_ != nullptr) {
         trayStatusAction_->setText(status);
+    }
+    const int iconState = meetingDialog_->isRecording() ? 1 : meetingDialog_->isBusy() ? 2 : 0;
+    if (iconState != currentTrayIcon_) {
+        trayIcon_.setIcon(iconState == 1 ? recordingTrayIcon_ : iconState == 2 ? transcribingTrayIcon_ : idleTrayIcon_);
+        currentTrayIcon_ = iconState;
+    }
+    if (trayStopMeetingAction_ != nullptr) {
+        trayStopMeetingAction_->setVisible(meetingDialog_->isRecording());
+        trayStopMeetingAction_->setEnabled(meetingDialog_->canStopRecording());
     }
     trayIcon_.setToolTip(QStringLiteral("Speak to Computer\n%1").arg(status));
 }
