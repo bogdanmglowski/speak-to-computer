@@ -199,6 +199,8 @@ fi
 echo "Installing binary to ${INSTALLED_BINARY}"
 install -d -m 0755 "${INSTALL_BIN_DIR}"
 install -m 0755 "${BUILD_BINARY}" "${INSTALLED_BINARY}"
+install -m 0644 "${PROJECT_ROOT}/scripts/meeting_diarization.py" "${INSTALL_BIN_DIR}/meeting_diarization.py"
+install -m 0644 "${PROJECT_ROOT}/scripts/meeting_analysis.py" "${INSTALL_BIN_DIR}/meeting_analysis.py"
 
 echo "Installing activation sound to ${INSTALLED_ACTIVATION_SOUND}"
 install -m 0644 "${ACTIVATION_SOUND_SOURCE}" "${INSTALLED_ACTIVATION_SOUND}"
