@@ -29,6 +29,12 @@ struct AppSettings {
     QString handoffDirectory = QStringLiteral("/tmp/agent");
     QString handoffTriggerWords;
     QString meetingsDirectory;
+    QString diarizationRuntimeDirectory;
+    QString huggingFaceHome;
+    QString huggingFaceToken;
+    QString analysisOllamaUrl = QStringLiteral("http://127.0.0.1:11434");
+    QString analysisOllamaModel = QStringLiteral("qwen3:8b");
+    QString analysisCodexCli = QStringLiteral("codex");
 
     static QString expandUserPath(const QString &path);
     static QString modelLabel(const QString &modelPath);
