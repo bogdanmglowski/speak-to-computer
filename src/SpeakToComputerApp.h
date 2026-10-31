@@ -6,6 +6,7 @@
 #include "ClipboardPaster.h"
 #include "FileHandoff.h"
 #include "OverlayWidget.h"
+#include "ParakeetRunner.h"
 #include "RealtimeSidecar.h"
 #include "VadEndpointDetector.h"
 #include "WakeWordListener.h"
@@ -84,6 +85,7 @@ private:
     bool applyEngineSelection(const QString &engineId, QString *errorMessage);
     bool applyLanguageSelection(const QString &languageCode, QString *errorMessage);
     bool applySettings(const AppSettings &newSettings, QString *errorMessage);
+    bool registerPushToTalkButton(int button, QString *errorMessage);
     bool maybeOfferModelFallback(const QString &message);
     QString outputLabel(OutputMode outputMode) const;
     QString gpuMemoryLabel() const;
@@ -118,7 +120,10 @@ private:
     X11Hotkey dictateHotkey_;
     X11Hotkey mouseDictateHotkey_;
     X11Hotkey mouseFinishHotkey_;
+    X11Hotkey pushToTalkHotkey_;
     bool sendEnterAfterTranscription_ = false;
+    bool pushToTalkActive_ = false;
+    bool pushToTalkTranscription_ = false;
     X11Hotkey translateHotkey_;
     X11Hotkey overlayCloseHotkey_;
     OverlayWidget overlay_;
@@ -126,6 +131,7 @@ private:
     WhisperRunner whisper_;
     std::unique_ptr<MeetingDialog> meetingDialog_;
     BuzzAsrRunner buzzAsr_;
+    ParakeetRunner parakeet_;
     ClipboardPaster paster_;
     FileHandoff handoff_;
     RealtimeSidecar realtime_;

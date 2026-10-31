@@ -2,12 +2,14 @@
 audio_backend=pipewire
 hotkey_dictate=Super+Space
 hotkey_translate_en=Super+slash
+push_to_talk_button=11
+push_to_talk_send_enter=false
 language=pl
 threads=12
 model=/media/extraHDD/whisper-models/ggml-small.bin
 whisper_cli=~/whisper.cpp/build/bin/whisper-cli
-activation_sound=activation_sound.wav
-end_sound=end_sound.wav
+activation_sound=sounds/soft/start.wav
+end_sound=sounds/soft/stop.wav
 wake_word_enabled=false
 wake_word_phrase=alexa
 wake_word_model_path=
@@ -25,7 +27,7 @@ handoff_trigger_words=
 # activation_sound - sound played when recording starts (before UI appears)
 #   - absolute path: /full/path/to/sound.wav
 #   - relative path: sound.wav (searched in application directory, next to the binary)
-#   - empty/unspecified: defaults to activation_sound.wav next to binary
+#   - unspecified: defaults to sounds/soft/start.wav next to binary
 #   - file must exist, otherwise skipped silently
 
 # end_sound - sound played when recording stops (before transcription starts)

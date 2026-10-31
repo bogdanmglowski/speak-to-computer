@@ -26,12 +26,12 @@ QString defaultModel()
 
 QString bundledActivationSound()
 {
-    return QStringLiteral("activation_sound.wav");
+    return QStringLiteral("sounds/soft/start.wav");
 }
 
 QString bundledEndSound()
 {
-    return QStringLiteral("end_sound.wav");
+    return QStringLiteral("sounds/soft/stop.wav");
 }
 
 QString defaultWakeWordPhrase()
@@ -117,6 +117,24 @@ QString defaultBuzzAsrScript()
             .filePath(QStringLiteral("speak-to-computer/buzzasr/buzzasr_transcribe.py"));
 }
 
+QString defaultParakeetPython()
+{
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
+            .filePath(QStringLiteral("speak-to-computer/parakeet/.venv/bin/python"));
+}
+
+QString defaultParakeetScript()
+{
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
+            .filePath(QStringLiteral("speak-to-computer/parakeet/parakeet_transcribe.py"));
+}
+
+// 0 turns push-to-talk off. Buttons 1-7 are clicks and wheel; 9 and 10 are the dictation buttons.
+bool isValidPushToTalkButton(int button)
+{
+    return button == 0 || (button >= 8 && button <= 255 && button != 9 && button != 10);
+}
+
 QString settingsFilePath()
 {
     const QString configRoot = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
@@ -200,6 +218,18 @@ void ensureDefaults(QSettings *settings)
     if (!settings->contains(QStringLiteral("buzzasr_script"))) {
         settings->setValue(QStringLiteral("buzzasr_script"), defaultBuzzAsrScript());
     }
+    if (!settings->contains(QStringLiteral("parakeet_python"))) {
+        settings->setValue(QStringLiteral("parakeet_python"), defaultParakeetPython());
+    }
+    if (!settings->contains(QStringLiteral("parakeet_script"))) {
+        settings->setValue(QStringLiteral("parakeet_script"), defaultParakeetScript());
+    }
+    if (!settings->contains(QStringLiteral("push_to_talk_button"))) {
+        settings->setValue(QStringLiteral("push_to_talk_button"), 11);
+    }
+    if (!settings->contains(QStringLiteral("push_to_talk_send_enter"))) {
+        settings->setValue(QStringLiteral("push_to_talk_send_enter"), false);
+    }
     if (settings->value(QStringLiteral("buzzasr_python")).toString()
             == QStringLiteral("/tmp/opencode/cer-poc/.venv/bin/python")) {
         settings->setValue(QStringLiteral("buzzasr_python"), defaultBuzzAsrPython());
@@ -224,6 +254,12 @@ void ensureDefaults(QSettings *settings)
         settings->setValue(QStringLiteral("activation_sound"), bundledActivationSound());
     }
     if (!settings->contains(QStringLiteral("end_sound"))) {
+        settings->setValue(QStringLiteral("end_sound"), bundledEndSound());
+    }
+    if (settings->value(QStringLiteral("activation_sound")).toString() == QStringLiteral("activation_sound.wav")) {
+        settings->setValue(QStringLiteral("activation_sound"), bundledActivationSound());
+    }
+    if (settings->value(QStringLiteral("end_sound")).toString() == QStringLiteral("end_sound.wav")) {
         settings->setValue(QStringLiteral("end_sound"), bundledEndSound());
     }
     if (!settings->contains(QStringLiteral("wake_word_enabled"))) {
@@ -358,12 +394,17 @@ bool AppSettings::isRealtimeEngine() const
 
 bool AppSettings::isWhisperCppEngine() const
 {
-    return !isRealtimeEngine() && !isBuzzAsrEngine();
+    return !isRealtimeEngine() && !isBuzzAsrEngine() && !isParakeetEngine();
 }
 
 bool AppSettings::isBuzzAsrEngine() const
 {
     return engine.trimmed().compare(QString::fromUtf8(kEngineBuzzAsr), Qt::CaseInsensitive) == 0;
+}
+
+bool AppSettings::isParakeetEngine() const
+{
+    return engine.trimmed().compare(QString::fromUtf8(kEngineParakeet), Qt::CaseInsensitive) == 0;
 }
 
 bool AppSettings::isPinPasteTarget() const
@@ -385,6 +426,9 @@ QString AppSettings::normalizeEngine(const QString &engine)
     if (trimmed.compare(QString::fromUtf8(kEngineBuzzAsr), Qt::CaseInsensitive) == 0) {
         return QString::fromUtf8(kEngineBuzzAsr);
     }
+    if (trimmed.compare(QString::fromUtf8(kEngineParakeet), Qt::CaseInsensitive) == 0) {
+        return QString::fromUtf8(kEngineParakeet);
+    }
     return QString::fromUtf8(kEngineWhisperCpp);
 }
 
@@ -395,6 +439,9 @@ QString AppSettings::engineLabel(const QString &engine)
     }
     if (normalizeEngine(engine) == QString::fromUtf8(kEngineBuzzAsr)) {
         return QStringLiteral("BuzzASR");
+    }
+    if (normalizeEngine(engine) == QString::fromUtf8(kEngineParakeet)) {
+        return QStringLiteral("Parakeet v3");
     }
     return QStringLiteral("Batch");
 }
@@ -559,6 +606,12 @@ bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
         }
         return false;
     }
+    if (!isValidPushToTalkButton(settingsData.pushToTalkButton)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Push-to-talk button must be 0 (off), or 8 to 255 except 9 and 10 (dictation).");
+        }
+        return false;
+    }
 
     QDir().mkpath(QFileInfo(settingsData.settingsPath).absolutePath());
     const QString tokenPath = QDir(QFileInfo(settingsData.settingsPath).absolutePath()).filePath(QStringLiteral("huggingface-token"));
@@ -594,6 +647,10 @@ bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
     settings.setValue(QStringLiteral("realtime_port"), settingsData.realtimePort);
     settings.setValue(QStringLiteral("buzzasr_python"), settingsData.buzzAsrPython.trimmed());
     settings.setValue(QStringLiteral("buzzasr_script"), settingsData.buzzAsrScript.trimmed());
+    settings.setValue(QStringLiteral("parakeet_python"), settingsData.parakeetPython.trimmed());
+    settings.setValue(QStringLiteral("parakeet_script"), settingsData.parakeetScript.trimmed());
+    settings.setValue(QStringLiteral("push_to_talk_button"), settingsData.pushToTalkButton);
+    settings.setValue(QStringLiteral("push_to_talk_send_enter"), settingsData.pushToTalkSendEnter);
     settings.setValue(QStringLiteral("dictionary_path"), settingsData.dictionaryPath.trimmed());
     settings.setValue(QStringLiteral("paste_target"), normalizePasteTarget(settingsData.pasteTarget));
     settings.setValue(QStringLiteral("mini_overlay_enabled"), settingsData.miniOverlayEnabled);
@@ -837,6 +894,10 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     }
     result.buzzAsrPython = expandUserPath(settings.value(QStringLiteral("buzzasr_python")).toString());
     result.buzzAsrScript = expandUserPath(settings.value(QStringLiteral("buzzasr_script")).toString());
+    result.parakeetPython = expandUserPath(settings.value(QStringLiteral("parakeet_python")).toString());
+    result.parakeetScript = expandUserPath(settings.value(QStringLiteral("parakeet_script")).toString());
+    result.pushToTalkButton = settings.value(QStringLiteral("push_to_talk_button"), 11).toInt();
+    result.pushToTalkSendEnter = settings.value(QStringLiteral("push_to_talk_send_enter"), false).toBool();
     result.realtimePort = settings.value(QStringLiteral("realtime_port"), 43001).toInt();
     if (result.realtimePort <= 0 || result.realtimePort > 65535) {
         result.realtimePort = 43001;
@@ -907,6 +968,9 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     }
     if (result.vadMinSpeechMs <= 0) {
         result.vadMinSpeechMs = 250;
+    }
+    if (!isValidPushToTalkButton(result.pushToTalkButton)) {
+        result.pushToTalkButton = 11;
     }
     return result;
 }
