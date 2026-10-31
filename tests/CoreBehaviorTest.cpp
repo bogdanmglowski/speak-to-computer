@@ -1,20 +1,28 @@
 #include "AppSettings.h"
 #include "AudioRecorder.h"
 #include "MeetingDialog.h"
+#include "MeetingAnalysisDialog.h"
 #include "MeetingStore.h"
 #include "OverlayWidget.h"
+#include "PreferencesDialog.h"
 #include "TranscriptCleaner.h"
 #include "VadEndpointDetector.h"
 #include "WavWriter.h"
 #include "WhisperRunner.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
 #include <QFile>
 #include <QKeyEvent>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QPlainTextEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QTableWidget>
 #include <QTimer>
 #include <QSettings>
@@ -34,8 +42,12 @@ private slots:
     void settingsShouldReturnOnlyExistingModelPaths();
     void settingsShouldSaveModelPath();
     void settingsShouldSaveAndReloadAllEditableFields();
+    void huggingFaceSetupShouldInstallAndSaveSettings();
+    void ollamaPreferencesShouldAcceptNetworkServer();
     void meetingStorageShouldKeepEntriesInConfiguredDirectory();
     void meetingRecordingAndTranscriptionShouldComplete();
+    void meetingSpeakerTranscriptionShouldSaveAndRename();
+    void meetingAnalysisShouldSaveVersionsAndDetectChanges();
     void meetingAudioFilterShouldPreserveSeparateChannels();
     void settingsShouldLoadSeparateHotkeyDefaults();
     void settingsShouldMigrateLegacyHotkeyToDictationHotkey();
@@ -56,6 +68,7 @@ private slots:
     void cleanupShouldDropWhisperNonSpeechAnnotations();
     void whisperRunnerShouldPassTranslateFlagWhenEnabled();
     void whisperRunnerShouldOmitTranslateFlagWhenDisabled();
+    void whisperRunnerShouldStreamMeetingProgress();
     void wavWriterShouldWritePcm16MonoHeader();
     void recorderAutoShouldPickFirstAvailableBackend();
     void recorderPulseaudioShouldUseParecOrParecord();
@@ -281,6 +294,300 @@ void CoreBehaviorTest::meetingStorageShouldKeepEntriesInConfiguredDirectory()
     QVERIFY(QFileInfo::exists(first.directory));
 }
 
+void CoreBehaviorTest::huggingFaceSetupShouldInstallAndSaveSettings()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    struct RestoreEnvironment {
+        QByteArray path = qgetenv("PATH");
+        QByteArray home = qgetenv("TEST_HF_HOME"); bool hadHome = qEnvironmentVariableIsSet("TEST_HF_HOME");
+        QByteArray fail = qgetenv("TEST_HF_FAIL"); bool hadFail = qEnvironmentVariableIsSet("TEST_HF_FAIL");
+        ~RestoreEnvironment() {
+            qputenv("PATH", path);
+            if (hadHome) qputenv("TEST_HF_HOME", home); else qunsetenv("TEST_HF_HOME");
+            if (hadFail) qputenv("TEST_HF_FAIL", fail); else qunsetenv("TEST_HF_FAIL");
+        }
+    } restore;
+    const QByteArray fakePython =
+            "#!/bin/sh\n"
+            "if [ \"$1\" = -m ] && [ \"$2\" = venv ]; then mkdir -p \"$3/bin\"; cp \"$0\" \"$3/bin/python\"; exit $?; fi\n"
+            "if [ \"$1\" = -c ]; then\n"
+            "  if [ \"$TEST_HF_FAIL\" = 1 ]; then echo \"$HF_TOKEN\" >&2; exit 1; fi\n"
+            "  [ \"$HF_TOKEN\" = hf_test_secret ] && [ \"$HF_HOME\" = \"$TEST_HF_HOME\" ] || exit 1\n"
+            "fi\nexit 0\n";
+    QVERIFY(!createExecutable(&dir, QStringLiteral("python3"), fakePython).isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + restore.path);
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    const QString runtimePath = dir.filePath(QStringLiteral("runtime"));
+    const QString cachePath = dir.filePath(QStringLiteral("cache"));
+    qputenv("TEST_HF_HOME", cachePath.toUtf8());
+    AppSettings settings = AppSettings::loadFromPath(settingsPath);
+    PreferencesDialog dialog(settings);
+    auto *token = dialog.findChild<QLineEdit *>(QStringLiteral("huggingFaceToken"));
+    auto *cache = dialog.findChild<QLineEdit *>(QStringLiteral("huggingFaceHome"));
+    auto *runtime = dialog.findChild<QLineEdit *>(QStringLiteral("diarizationRuntimeDirectory"));
+    auto *setup = dialog.findChild<QPushButton *>(QStringLiteral("diarizationSetup"));
+    auto *status = dialog.findChild<QLabel *>(QStringLiteral("diarizationSetupStatus"));
+    QVERIFY(token && cache && runtime && setup && status);
+    token->setText(QStringLiteral("hf_test_secret"));
+    cache->setText(cachePath); runtime->setText(runtimePath);
+    setup->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().startsWith(QStringLiteral("Integration ready")), 5000);
+    QString error;
+    QVERIFY2(AppSettings::save(dialog.editedSettings(), &error), qPrintable(error));
+    const AppSettings loaded = AppSettings::loadFromPath(settingsPath);
+    QCOMPARE(loaded.huggingFaceToken, QStringLiteral("hf_test_secret"));
+    QCOMPARE(loaded.huggingFaceHome, cachePath);
+    QCOMPARE(loaded.diarizationRuntimeDirectory, runtimePath);
+    QFile tokenFile(dir.filePath(QStringLiteral("huggingface-token")));
+    QVERIFY(tokenFile.exists());
+    QVERIFY(!(tokenFile.permissions() & (QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ReadOther | QFileDevice::WriteOther)));
+    QFile ini(settingsPath);
+    QVERIFY(ini.open(QIODevice::ReadOnly));
+    QVERIFY(!ini.readAll().contains("hf_test_secret"));
+    qputenv("TEST_HF_FAIL", "1");
+    setup->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().startsWith(QStringLiteral("Setup failed")), 5000);
+    QVERIFY(!status->text().contains(QStringLiteral("hf_test_secret")));
+    token->clear();
+    QVERIFY(AppSettings::save(dialog.editedSettings(), &error));
+    QVERIFY(!tokenFile.exists());
+}
+
+void CoreBehaviorTest::ollamaPreferencesShouldAcceptNetworkServer()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    struct RestorePath { QByteArray path = qgetenv("PATH"); ~RestorePath() { qputenv("PATH", path); } } restore;
+    const QByteArray fakePython =
+            "#!/bin/sh\n"
+            "[ \"$2\" = --list-models ] || exit 1\n"
+            "case \" $* \" in *' --endpoint http://karaczan:11434 '*) ;; *' --endpoint https://karaczan:11434 '*) ;; *) exit 2 ;; esac\n"
+            "printf '%s\\n' '{\"models\":[\"qwen3:8b\"]}'\n";
+    QVERIFY(!createExecutable(&dir, QStringLiteral("python3"), fakePython).isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + restore.path);
+    AppSettings settings = AppSettings::loadFromPath(dir.filePath(QStringLiteral("settings.ini")));
+    PreferencesDialog dialog(settings);
+    auto *address = dialog.findChild<QLineEdit *>(QStringLiteral("analysisOllamaUrl"));
+    auto *check = dialog.findChild<QPushButton *>(QStringLiteral("analysisCheckOllama"));
+    auto *status = dialog.findChild<QLabel *>(QStringLiteral("analysisOllamaStatus"));
+    QVERIFY(address && check && status);
+    address->setText(QStringLiteral("http://karaczan:11434"));
+    check->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(QStringLiteral("Connected. Models: qwen3:8b")), 5000);
+    QString error;
+    QVERIFY2(AppSettings::save(dialog.editedSettings(), &error), qPrintable(error));
+    QCOMPARE(AppSettings::loadFromPath(settings.settingsPath).analysisOllamaUrl, QStringLiteral("http://karaczan:11434"));
+    address->setText(QStringLiteral("https://karaczan:11434"));
+    check->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(QStringLiteral("Connected. Models: qwen3:8b")), 5000);
+    address->setText(QStringLiteral("http://karaczan/path"));
+    check->click();
+    QVERIFY(status->text().contains(QStringLiteral("without a path")));
+}
+
+void CoreBehaviorTest::meetingAnalysisShouldSaveVersionsAndDetectChanges()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    struct RestoreEnvironment {
+        QByteArray path = qgetenv("PATH"), key = qgetenv("OPENAI_API_KEY"), fail = qgetenv("TEST_ANALYSIS_FAIL"), hang = qgetenv("TEST_ANALYSIS_HANG");
+        bool hasKey = qEnvironmentVariableIsSet("OPENAI_API_KEY"), hasFail = qEnvironmentVariableIsSet("TEST_ANALYSIS_FAIL"), hasHang = qEnvironmentVariableIsSet("TEST_ANALYSIS_HANG");
+        ~RestoreEnvironment() {
+            qputenv("PATH", path);
+            if (hasKey) qputenv("OPENAI_API_KEY", key); else qunsetenv("OPENAI_API_KEY");
+            if (hasFail) qputenv("TEST_ANALYSIS_FAIL", fail); else qunsetenv("TEST_ANALYSIS_FAIL");
+            if (hasHang) qputenv("TEST_ANALYSIS_HANG", hang); else qunsetenv("TEST_ANALYSIS_HANG");
+        }
+    } restore;
+    const QByteArray fakePython =
+            "#!/bin/sh\n"
+            "[ -z \"$OPENAI_API_KEY\" ] && [ -z \"$CODEX_API_KEY\" ] || exit 8\n"
+            "if [ \"$2\" = --list-models ]; then\n"
+            "  case \" $* \" in *' --backend codex '*) printf '%s\\n' '{\"models\":[\"gpt-6-luna\",\"gpt-custom\"]}' ;; *' --backend opencode '*) printf '%s\\n' '{\"models\":[\"opencode-go/test\"]}' ;; *' --backend ollama_local '*) printf '%s\\n' '{\"models\":[\"local-only\"]}' ;; *) printf '%s\\n' '{\"models\":[\"qwen3:8b\",\"local-custom\"]}' ;; esac\n"
+            "  exit 0\nfi\n"
+            "case \" $* \" in *' --backend codex '*) case \" $* \" in *' --model gpt-custom '*) ;; *) exit 11 ;; esac ;; *) case \" $* \" in *' --model local-custom '*) ;; *) exit 12 ;; esac ;; esac\n"
+            "case \" $* \" in *' --backend codex '*) case \" $* \" in *' --reasoning-effort xhigh '*) ;; *) exit 13 ;; esac ;; *) case \" $* \" in *' --reasoning-effort '*) exit 14 ;; esac ;; esac\n"
+            "IFS= read -r first\n[ \"$first\" = '[00:00:01] Ja: Test.' ] || exit 10\ncat > /dev/null\n"
+            "if [ \"$TEST_ANALYSIS_HANG\" = 1 ]; then exec sleep 30; fi\n"
+            "if [ \"$TEST_ANALYSIS_FAIL\" = 1 ]; then echo 'synthetic error' >&2; exit 1; fi\n"
+            "printf 'ANALYSIS_PROGRESS {\"stage\":\"Test\",\"current\":1,\"total\":1}\\n' >&2\n"
+            "printf '%s\\n' '{\"markdown\":\"# Analiza spotkania\\n\\n- Wniosek (00:00:01)\\n\"}'\n";
+    QVERIFY(!createExecutable(&dir, QStringLiteral("python3"), fakePython).isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + restore.path);
+    qputenv("OPENAI_API_KEY", "should-not-reach-local");
+    AppSettings settings;
+    settings.meetingsDirectory = dir.filePath(QStringLiteral("meetings"));
+    settings.analysisOllamaUrl = QStringLiteral("http://karaczan:11434");
+    settings.settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    MeetingEntry entry; QString error;
+    QVERIFY(MeetingStore::create(settings.meetingsDirectory, &entry, &error));
+    QFile source(MeetingStore::transcriptPath(entry));
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    source.write("[00:00:01] Ja: Test.\n"); source.close();
+    MeetingAnalysisDialog dialog(entry, settings);
+    auto *start = dialog.findChild<QPushButton *>(QStringLiteral("analysisStart"));
+    auto *versions = dialog.findChild<QListWidget *>(QStringLiteral("analysisVersions"));
+    auto *preview = dialog.findChild<QPlainTextEdit *>(QStringLiteral("analysisPreview"));
+    auto *info = dialog.findChild<QLabel *>(QStringLiteral("analysisVersionInfo"));
+    auto *status = dialog.findChild<QLabel *>(QStringLiteral("analysisStatus"));
+    auto *backend = dialog.findChild<QComboBox *>(QStringLiteral("analysisBackend"));
+    auto *model = dialog.findChild<QComboBox *>(QStringLiteral("analysisModel"));
+    auto *reasoning = dialog.findChild<QComboBox *>(QStringLiteral("analysisReasoningEffort"));
+    auto *cancel = dialog.findChild<QPushButton *>(QStringLiteral("analysisCancel"));
+    QVERIFY(start && versions && preview && info && status && backend && model && reasoning && cancel);
+    QCOMPARE(backend->count(), 4);
+    QCOMPARE(backend->findData(QStringLiteral("openai")), -1);
+    QTRY_COMPARE_WITH_TIMEOUT(model->count(), 2, 5000);
+    model->setCurrentIndex(model->findText(QStringLiteral("local-custom")));
+    QSignalSpy busySpy(&dialog, &MeetingAnalysisDialog::busyChanged);
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(versions->count(), 1, 5000);
+    QVERIFY(preview->toPlainText().contains(QStringLiteral("Wniosek (00:00:01)")));
+    QCOMPARE(info->text(), QStringLiteral("Based on the current transcript."));
+    QCOMPARE(busySpy.size(), 2);
+    QVERIFY(busySpy[0][0].toBool()); QVERIFY(!busySpy[1][0].toBool());
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(versions->count(), 2, 5000);
+    qputenv("TEST_ANALYSIS_FAIL", "1");
+    start->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(QStringLiteral("synthetic error")), 5000);
+    QCOMPARE(versions->count(), 2);
+    qunsetenv("TEST_ANALYSIS_FAIL");
+    backend->setCurrentIndex(backend->findData(QStringLiteral("ollama_local")));
+    QTRY_VERIFY_WITH_TIMEOUT(model->findText(QStringLiteral("local-only")) >= 0, 5000);
+    backend->setCurrentIndex(backend->findData(QStringLiteral("opencode")));
+    QTRY_VERIFY_WITH_TIMEOUT(model->findText(QStringLiteral("opencode-go/test")) >= 0, 5000);
+    backend->setCurrentIndex(backend->findData(QStringLiteral("ollama")));
+    QTRY_COMPARE_WITH_TIMEOUT(model->currentText(), QStringLiteral("local-custom"), 5000);
+    backend->setCurrentIndex(backend->findData(QStringLiteral("codex")));
+    QTRY_VERIFY_WITH_TIMEOUT(model->findText(QStringLiteral("gpt-custom")) >= 0, 5000);
+    model->setCurrentIndex(model->findText(QStringLiteral("gpt-custom")));
+    reasoning->setCurrentIndex(reasoning->findData(QStringLiteral("xhigh")));
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(versions->count(), 3, 5000);
+    QVERIFY(versions->currentItem()->text().contains(QStringLiteral("gpt-custom")));
+    QVERIFY(versions->currentItem()->text().contains(QStringLiteral("xhigh")));
+    qputenv("TEST_ANALYSIS_HANG", "1");
+    start->click();
+    QTRY_VERIFY_WITH_TIMEOUT(cancel->isEnabled(), 2000);
+    cancel->click();
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(QStringLiteral("Analysis canceled")), 5000);
+    QCOMPARE(versions->count(), 3);
+    qunsetenv("TEST_ANALYSIS_HANG");
+    QVERIFY(source.open(QIODevice::Append)); source.write("[00:00:02] Inna wypowiedź.\n"); source.close();
+    const QString legacyPath = QDir(entry.directory).filePath(QStringLiteral("analyses/20000101-000000-000-legacy.md"));
+    QFile legacy(legacyPath); QVERIFY(legacy.open(QIODevice::WriteOnly));
+    legacy.write("<!-- STC_ANALYSIS {\"backend\":\"openai\",\"model\":\"old-model\"} -->\n# Older analysis\n"); legacy.close();
+    MeetingAnalysisDialog reopened(entry, settings);
+    auto *stale = reopened.findChild<QLabel *>(QStringLiteral("analysisVersionInfo"));
+    auto *reopenedReasoning = reopened.findChild<QComboBox *>(QStringLiteral("analysisReasoningEffort"));
+    auto *reopenedVersions = reopened.findChild<QListWidget *>(QStringLiteral("analysisVersions"));
+    auto *reopenedPreview = reopened.findChild<QPlainTextEdit *>(QStringLiteral("analysisPreview"));
+    QVERIFY(stale && reopenedReasoning && reopenedVersions && reopenedPreview);
+    QCOMPARE(reopenedReasoning->currentData().toString(), QStringLiteral("xhigh"));
+    QCOMPARE(stale->text(), QStringLiteral("This analysis is based on an older version of the transcript."));
+    QCOMPARE(reopenedVersions->count(), 4);
+    for (int i = 0; i < reopenedVersions->count(); ++i)
+        if (reopenedVersions->item(i)->data(Qt::UserRole).toString() == legacyPath) reopenedVersions->setCurrentRow(i);
+    QVERIFY(reopenedPreview->toPlainText().contains(QStringLiteral("Older analysis")));
+
+    settings = AppSettings::loadFromPath(dir.filePath(QStringLiteral("settings.ini")));
+    QCOMPARE(settings.analysisOllamaModel, QStringLiteral("local-custom"));
+    QCOMPARE(QSettings(settings.settingsPath, QSettings::IniFormat).value(QStringLiteral("analysis_codex_model")).toString(), QStringLiteral("gpt-custom"));
+    QCOMPARE(QSettings(settings.settingsPath, QSettings::IniFormat).value(QStringLiteral("analysis_codex_reasoning_effort")).toString(), QStringLiteral("xhigh"));
+    PreferencesDialog preferences(settings);
+    QVERIFY(!preferences.findChild<QLineEdit *>(QStringLiteral("analysisOpenAiModel")));
+    QVERIFY(!preferences.findChild<QLineEdit *>(QStringLiteral("analysisOllamaModel")));
+    QVERIFY(!preferences.findChild<QLineEdit *>(QStringLiteral("analysisOpenAiKey")));
+    auto *codexPath = preferences.findChild<QLineEdit *>(QStringLiteral("analysisCodexCli"));
+    QVERIFY(codexPath);
+    codexPath->setText(QStringLiteral("/opt/codex"));
+    settings = preferences.editedSettings();
+    QFile key(dir.filePath(QStringLiteral("openai-api-key")));
+    QVERIFY(key.open(QIODevice::WriteOnly)); key.write("legacy-key"); key.close();
+    QVERIFY2(AppSettings::save(settings, &error), qPrintable(error));
+    AppSettings loaded = AppSettings::loadFromPath(settings.settingsPath);
+    QCOMPARE(loaded.analysisCodexCli, QStringLiteral("/opt/codex"));
+    QVERIFY(key.open(QIODevice::ReadOnly)); QCOMPARE(key.readAll(), QByteArray("legacy-key"));
+}
+
+void CoreBehaviorTest::meetingSpeakerTranscriptionShouldSaveAndRename()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QByteArray oldPython = qgetenv("STC_DIARIZATION_PYTHON");
+    const bool hadPython = qEnvironmentVariableIsSet("STC_DIARIZATION_PYTHON");
+    struct RestoreEnvironment {
+        QByteArray value; bool wasSet;
+        ~RestoreEnvironment() { if (wasSet) qputenv("STC_DIARIZATION_PYTHON", value); else qunsetenv("STC_DIARIZATION_PYTHON"); }
+    } restore{oldPython, hadPython};
+    const QString python = createExecutable(&dir, QStringLiteral("python"),
+            "#!/bin/sh\n[ \"$HF_TOKEN\" = hf_test ] && [ \"$HF_HOME\" = /test/cache ] || exit 2\n"
+            "printf 'STC_PROGRESS {\"stage\":\"transcribe_' >&2\nsleep 0.1\n"
+            "printf 'remote\",\"percent\":42}\\n' >&2\nsleep 1.3\n"
+            "printf '%s\\n' '{\"segments\":[{\"start\":0,\"end\":1,\"speaker\":\"Ja\",\"text\":\"Hello\"},{\"start\":2,\"end\":3,\"speaker\":\"Osoba 1\",\"text\":\"Hi\"},{\"start\":4,\"end\":5,\"speaker\":\"Osoba 1\",\"text\":\"Again\"}]}'\n");
+    QVERIFY(!python.isEmpty());
+    qputenv("STC_DIARIZATION_PYTHON", python.toUtf8());
+    AppSettings settings;
+    settings.meetingsDirectory = dir.filePath(QStringLiteral("meetings"));
+    settings.huggingFaceToken = QStringLiteral("hf_test");
+    settings.huggingFaceHome = QStringLiteral("/test/cache");
+    MeetingEntry entry; QString error;
+    QVERIFY2(MeetingStore::create(settings.meetingsDirectory, &entry, &error), qPrintable(error));
+    entry.status = QStringLiteral("Ready");
+    QVERIFY(MeetingStore::save(entry, &error));
+    QFile audio(MeetingStore::audioPath(entry));
+    QVERIFY(audio.open(QIODevice::WriteOnly));
+    audio.write("audio"); audio.close();
+    WhisperRunner runner;
+    MeetingDialog dialog(settings, &runner, [] { return true; });
+    auto *table = dialog.findChild<QTableWidget *>(QStringLiteral("meetingTable"));
+    auto *transcribe = dialog.findChild<QPushButton *>(QStringLiteral("meetingTranscribeSpeakers"));
+    auto *rename = dialog.findChild<QPushButton *>(QStringLiteral("meetingRenameSpeaker"));
+    auto *progress = dialog.findChild<QProgressBar *>(QStringLiteral("meetingTranscriptionProgress"));
+    auto *status = dialog.findChild<QLabel *>(QStringLiteral("meetingStatus"));
+    QVERIFY(table && transcribe && rename && progress && status);
+    table->selectRow(0);
+    QVERIFY(transcribe->isEnabled());
+    QElapsedTimer timing; timing.start();
+    transcribe->click();
+    QTRY_COMPARE_WITH_TIMEOUT(progress->value(), 42, 4000);
+    QVERIFY(status->text().contains(QStringLiteral("Transcribing remote speakers: 42%")));
+    QVERIFY(status->text().contains(QStringLiteral("Elapsed:")));
+    QTRY_VERIFY_WITH_TIMEOUT(!dialog.isBusy(), 5000);
+    QVERIFY(timing.elapsed() >= 1000);
+    QVERIFY(status->text().contains(QStringLiteral("Speaker transcription saved. Elapsed:")));
+    QVERIFY(progress->isHidden());
+    QFile transcript(MeetingStore::transcriptPath(entry));
+    QVERIFY(transcript.open(QIODevice::ReadOnly));
+    const QByteArray original = transcript.readAll(); transcript.close();
+    QVERIFY(original.contains("Ja: Hello"));
+    QVERIFY(original.contains("Osoba 1: Hi"));
+    QVERIFY(rename->isEnabled());
+    int prompt = 0;
+    QTimer timer;
+    connect(&timer, &QTimer::timeout, [&prompt]() {
+        for (QWidget *widget : QApplication::topLevelWidgets()) {
+            auto *input = qobject_cast<QInputDialog *>(widget);
+            if (input && input->isVisible()) {
+                if (++prompt == 2) input->setTextValue(QStringLiteral("Ania"));
+                input->accept();
+                break;
+            }
+        }
+    });
+    timer.start(10);
+    rename->click();
+    timer.stop();
+    QCOMPARE(prompt, 2);
+    QVERIFY(transcript.open(QIODevice::ReadOnly));
+    const QByteArray renamed = transcript.readAll();
+    QVERIFY(renamed.contains("Ania: Hi"));
+    QVERIFY(renamed.contains("Ania: Again"));
+    QVERIFY(renamed.contains("Ja: Hello"));
+}
+
 void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()
 {
     QTemporaryDir dir;
@@ -299,7 +606,7 @@ void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()
             "printf audio > \"$last\"\n"
             "case \"$*\" in *'-f pulse'*) read line ;; esac\n"
             "exit 0\n";
-    const QByteArray whisper = "#!/bin/sh\nprintf '[00:00:00.000 --> 00:00:01.000] Hello meeting.\\n'\n";
+    const QByteArray whisper = "#!/bin/sh\nprintf 'progress =  50%%\\n' >&2\nsleep 0.3\nprintf '[00:00:00.000 --> 00:00:01.000] Hello meeting.\\n'\n";
     QVERIFY(!createExecutable(&dir, QStringLiteral("pactl"), pactl).isEmpty());
     QVERIFY(!createExecutable(&dir, QStringLiteral("ffmpeg"), ffmpeg).isEmpty());
     const QString cli = createExecutable(&dir, QStringLiteral("whisper-cli"), whisper);
@@ -332,6 +639,8 @@ void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()
     auto *detailsStarted = dialog.findChild<QLabel *>(QStringLiteral("meetingDetailsStarted"));
     auto *detailsDuration = dialog.findChild<QLabel *>(QStringLiteral("meetingDetailsDuration"));
     auto *filesTable = dialog.findChild<QTableWidget *>(QStringLiteral("meetingFilesTable"));
+    auto *progress = dialog.findChild<QProgressBar *>(QStringLiteral("meetingTranscriptionProgress"));
+    auto *status = dialog.findChild<QLabel *>(QStringLiteral("meetingStatus"));
     QVERIFY(record && stop && transcribe && hideToTray && closeWindow && table);
     QVERIFY(recordingIndicator && headerTitle && detailsTitle && detailsStatus && detailsLocation && detailsStarted && detailsDuration && filesTable);
     QVERIFY(!headerTitle->font().bold());
@@ -387,8 +696,14 @@ void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()
     table->selectRow(0);
     QTRY_VERIFY(transcribe->isEnabled());
     transcribe->click();
+    QVERIFY(progress && status);
+    QTRY_COMPARE_WITH_TIMEOUT(progress->value(), 50, 5000);
+    QVERIFY(status->text().contains(QStringLiteral("Transcribing meeting: 50%")));
+    QVERIFY(status->text().contains(QStringLiteral("Elapsed:")));
     QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(MeetingStore::transcriptPath(entry)), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(!dialog.isBusy(), 5000);
+    QVERIFY(status->text().contains(QStringLiteral("Transcription saved. Elapsed:")));
+    QVERIFY(progress->isHidden());
     QVERIFY(sawTranscribingStatus);
     QFile transcript(MeetingStore::transcriptPath(entry));
     QVERIFY(transcript.open(QIODevice::ReadOnly));
@@ -807,6 +1122,30 @@ void CoreBehaviorTest::whisperRunnerShouldOmitTranslateFlagWhenDisabled()
     QVERIFY(argsFile.open(QIODevice::ReadOnly));
     const QStringList args = QString::fromUtf8(argsFile.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     QVERIFY2(!args.contains(QStringLiteral("-tr")), qPrintable(args.join(QLatin1Char(' '))));
+}
+
+void CoreBehaviorTest::whisperRunnerShouldStreamMeetingProgress()
+{
+    QTemporaryDir dir;
+    const QString cli = createExecutable(&dir, QStringLiteral("whisper-cli"),
+            "#!/bin/sh\n"
+            "case \" $* \" in *' -pp '*) ;; *) exit 3 ;; esac\n"
+            "printf 'whisper_print_progress_callback: progress = ' >&2\n"
+            "sleep 0.1\n"
+            "printf ' 42%%\\nprogress = 20%%\\nprogress = 101%%\\n' >&2\n"
+            "printf '[00:00:00.000 --> 00:00:01.000] Hello.\\n'\n");
+    QVERIFY(!cli.isEmpty());
+    AppSettings settings;
+    settings.whisperCli = cli; settings.model = dir.filePath(QStringLiteral("model"));
+    settings.language = QStringLiteral("pl"); settings.threads = 2;
+    WhisperRunner runner;
+    QSignalSpy progressSpy(&runner, &WhisperRunner::progressChanged);
+    QSignalSpy readySpy(&runner, &WhisperRunner::transcriptionReady);
+    runner.transcribe(dir.filePath(QStringLiteral("audio.wav")), settings, true);
+    QTRY_COMPARE_WITH_TIMEOUT(readySpy.size(), 1, 5000);
+    QCOMPARE(progressSpy.size(), 1);
+    QCOMPARE(progressSpy.first().first().toInt(), 42);
+    QCOMPARE(readySpy.first().first().toString(), QStringLiteral("[00:00:00.000 --> 00:00:01.000] Hello."));
 }
 
 void CoreBehaviorTest::wavWriterShouldWritePcm16MonoHeader()
