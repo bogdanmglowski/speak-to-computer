@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QProcessEnvironment>
+#include <QRegularExpression>
 #include <QStringList>
 
 namespace {
@@ -38,9 +39,11 @@ QString contextInitializationHint(const QString &details, const QString &modelPa
 WhisperRunner::WhisperRunner(QObject *parent)
     : QObject(parent)
 {
+    connect(&process_, &QProcess::readyReadStandardError, this, [this]() { consumeStandardError(); });
     connect(&process_, &QProcess::finished, this, [this](int exitCode, QProcess::ExitStatus exitStatus) {
         const QString stdoutText = QString::fromUtf8(process_.readAllStandardOutput()).trimmed();
-        const QString stderrText = QString::fromUtf8(process_.readAllStandardError()).trimmed();
+        consumeStandardError(true);
+        const QString stderrText = QString::fromUtf8(stderrText_).trimmed();
         if (exitStatus != QProcess::NormalExit || exitCode != 0) {
             const QString details = nonEmptyErrorDetails(stderrText, stdoutText);
             const QString hint = contextInitializationHint(details, currentModelPath_);
@@ -78,6 +81,30 @@ WhisperRunner::WhisperRunner(QObject *parent)
             }
         }
     });
+}
+
+void WhisperRunner::consumeStandardError(bool final)
+{
+    const QByteArray chunk = process_.readAllStandardError();
+    stderrText_.append(chunk);
+    if (stderrText_.size() > 32768) stderrText_.remove(0, stderrText_.size() - 32768);
+    if (!timestamps_) return;
+    stderrPending_.append(chunk);
+    static const QRegularExpression pattern(QStringLiteral(R"(progress\s*=\s*(\d{1,3})\s*%)"));
+    qsizetype end;
+    while ((end = stderrPending_.indexOf('\n')) >= 0 || (final && !stderrPending_.isEmpty())) {
+        if (end < 0) end = stderrPending_.size();
+        const QString line = QString::fromUtf8(stderrPending_.left(end));
+        stderrPending_.remove(0, qMin(end + 1, stderrPending_.size()));
+        const auto match = pattern.match(line);
+        if (!match.hasMatch()) continue;
+        const int percent = match.captured(1).toInt();
+        if (percent >= 0 && percent <= 100 && percent > lastProgress_) {
+            lastProgress_ = percent;
+            emit progressChanged(percent);
+        }
+    }
+    if (stderrPending_.size() > 32768) stderrPending_ = stderrPending_.right(1024);
 }
 
 WhisperRunner::~WhisperRunner()
@@ -126,6 +153,7 @@ void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settin
             QStringLiteral("-np"),
     };
     if (!timestamps) arguments << QStringLiteral("-nt");
+    else arguments << QStringLiteral("-pp");
     if (settings.translateToEn) {
         arguments << QStringLiteral("-tr");
     }
@@ -139,5 +167,6 @@ void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settin
     currentModelPath_ = settings.model;
     currentWavPath_ = wavPath;
     timestamps_ = timestamps;
+    stderrText_.clear(); stderrPending_.clear(); lastProgress_ = -1;
     process_.start();
 }

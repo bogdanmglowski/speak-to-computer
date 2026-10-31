@@ -18,11 +18,16 @@ public:
 signals:
     void transcriptionReady(const QString &text);
     void failed(const QString &message);
+    void progressChanged(int percent);
 
 private:
+    void consumeStandardError(bool final = false);
     QString currentWhisperCliPath_;
     QString currentModelPath_;
     QString currentWavPath_;
     QProcess process_;
     bool timestamps_ = false;
+    QByteArray stderrText_;
+    QByteArray stderrPending_;
+    int lastProgress_ = -1;
 };
