@@ -1,5 +1,6 @@
 #include "WhisperRunner.h"
 
+#include "AppSettings.h"
 #include "TranscriptCleaner.h"
 
 #include <QDebug>
@@ -128,6 +129,15 @@ void WhisperRunner::transcribe(const QString &wavPath, const AppSettings &settin
     };
     if (settings.translateToEn) {
         arguments << QStringLiteral("-tr");
+    }
+
+    const QString dictionaryPrompt = AppSettings::loadDictionaryPrompt(settings.dictionaryPath);
+    if (!dictionaryPrompt.isEmpty()) {
+        // Soft terminology bias (not a forced lexicon).
+        arguments << QStringLiteral("--prompt") << dictionaryPrompt
+                  << QStringLiteral("--carry-initial-prompt");
+        qInfo().noquote() << "whisper dictionary prompt chars" << dictionaryPrompt.size()
+                          << "from" << settings.dictionaryPath;
     }
 
     process_.setProcessEnvironment(environment);

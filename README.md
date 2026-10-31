@@ -81,12 +81,74 @@ optional features and are disabled by default.
   - PulseAudio-compatible: `parec` or `parecord`
   - ALSA fallback: `arecord`
 - `xdotool`
+- `xclip` for X11 clipboard ownership
 - `whisper.cpp` built at `~/whisper.cpp` (can be overridden with `whisper_cli` setting)
 - a multilingual Whisper model, defaulting to `ggml-small.bin` (can be overridden with `model` setting)
 
 Optional runtime dependencies:
 - VAD auto-stop: `libfvad`
 - Wake word: local Python runtime for `openwakeword`
+- BuzzASR: NVIDIA GPU and the runtime installed below
+
+### Parakeet v3 and push-to-talk
+
+Install the Parakeet runtime with `bash scripts/install-parakeet-runtime.sh`.
+It downloads the multilingual model (about 2.5 GB) and CUDA dependencies. Select
+**Parakeet v3** in Preferences or the overlay. It detects the language from audio;
+it transcribes speech but does not translate to English or use dictionary prompts.
+
+On X11, hold push-to-talk to record and release to transcribe and paste. The
+default is X11 button 11, corresponding to Hex Mouse 7. Preferences lets you
+choose another X11 button or disable it with 0. Buttons 9 and 10 retain their
+existing behavior. Use `xev` to identify a physical button. Automatic Enter is
+off by default; enabling it can execute commands in a terminal. Push-to-talk
+ignores VAD auto-stop and always pastes, even when file handoff is selected.
+Push-to-talk requires a batch engine, not Realtime.
+
+The bundled soft start and stop sounds come from Hex and include its MIT license.
+Custom sound paths in Preferences remain unchanged.
+
+### BuzzASR Polish engine
+
+Install the Python runtime separately from the fast app installer:
+
+```bash
+bash scripts/install-buzzasr-runtime.sh
+scripts/install-autostart.sh
+```
+
+The runtime lives in `~/.local/share/speak-to-computer/buzzasr`, or under
+`$XDG_DATA_HOME` when set. The old `/tmp/opencode/cer-poc` interpreter setting
+is migrated automatically. Custom interpreter paths remain unchanged.
+cuDNN is discovered from that interpreter's site-packages, without a fixed Python version.
+Select **BuzzASR (Polish)** in Preferences or the overlay engine menu.
+This engine does not translate to English.
+
+Preferences → Dictionary → Edit opens the existing one-term-per-line dictionary.
+whisper.cpp and Realtime use it as a soft recognition prompt, not a replacement table.
+BuzzASR's replacement tokenizer does not reliably support Whisper prompt IDs;
+dictionary prompts are deliberately disabled for that engine.
+Changes apply to the next whisper.cpp transcription. For Realtime, restart the session.
+Hints can improve names or introduce errors, so compare results on your own recordings.
+
+The tray menu's **Kopiuj ostatni tekst** copies the latest recognition result,
+including a result whose automatic paste failed. It does not paste or press Enter.
+There is no additional on-disk history for this feature; its buffer is cleared on exit.
+BuzzASR's temporary IPC files and diagnostic stderr live under `$XDG_RUNTIME_DIR`.
+
+**Tryb mini** is available directly in the tray menu and in Preferences → Overlay.
+It persists as `mini_overlay_enabled=true`, defaulting to false. During recording
+it shows only a stationary voice visualizer, elapsed time, and GPU memory on a
+transparent background. Transcription, completion, and errors use the full view.
+The normal finish buttons and Shift+Escape cancellation remain available.
+
+For pauses while thinking, try `vad_end_silence_ms=1500`, or choose 1500/2500 ms
+from the overlay VAD menu. Longer silence delays automatic completion; manual finish
+still acts immediately. Existing custom VAD settings are not migrated.
+
+On X11, mouse button 10 toggles dictation. During batch recording, button 9 finishes,
+pastes, and presses Enter. Button 9 retains its normal action outside recording.
+**In a terminal, Enter can execute the dictated command.**
 
 The current defaults:
 
@@ -520,9 +582,9 @@ If your default `python3` is 3.12+, install Python 3.11 (or 3.10) and run:
 PYTHON_BIN=python3.11 ~/.local/share/speak-to-computer/python/install-openwakeword-runtime.sh
 ```
 
-### `uv` option on Ubuntu or Pop!_OS
+### `uv` option on Debian, Ubuntu, or Pop!_OS
 
-On Pop!_OS 24.04 / Ubuntu 24.04, a simple option is `uv`:
+On Debian 12 / Pop!_OS 24.04 / Ubuntu 24.04, a simple option is `uv`:
 
 ```bash
 uv python install 3.11

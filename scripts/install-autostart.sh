@@ -35,7 +35,7 @@ AUTOSTART_FILE="${AUTOSTART_DIR}/${APP_ID}.desktop"
 
 has_libfvad_runtime() {
     if command -v ldconfig >/dev/null 2>&1; then
-        if ldconfig -p 2>/dev/null | grep -qi 'libfvad\.so'; then
+        if ldconfig -p 2>/dev/null | grep -i 'libfvad\.so' >/dev/null; then
             return 0
         fi
     fi
@@ -189,7 +189,11 @@ fi
 ensure_libfvad_runtime
 
 echo "Building ${APP_ID}"
-"${PROJECT_ROOT}/scripts/clean-build.sh"
+cmake -S "${PROJECT_ROOT}" -B "${PROJECT_ROOT}/build-speak-to-computer"
+cmake --build "${PROJECT_ROOT}/build-speak-to-computer" --parallel
+
+echo "Running tests"
+ctest --test-dir "${PROJECT_ROOT}/build-speak-to-computer" --output-on-failure
 
 if [[ ! -x "${BUILD_BINARY}" ]]; then
     echo "Build did not produce an executable: ${BUILD_BINARY}" >&2
@@ -205,6 +209,8 @@ install -m 0644 "${ACTIVATION_SOUND_SOURCE}" "${INSTALLED_ACTIVATION_SOUND}"
 
 echo "Installing end sound to ${INSTALLED_END_SOUND}"
 install -m 0644 "${END_SOUND_SOURCE}" "${INSTALLED_END_SOUND}"
+install -d -m 0755 "${INSTALL_BIN_DIR}/sounds/soft"
+install -m 0644 "${PROJECT_ROOT}/assets/sounds/soft/"* "${INSTALL_BIN_DIR}/sounds/soft/"
 
 echo "Installing wake-word sidecar to ${INSTALLED_WAKE_WORD_SIDECAR}"
 install -d -m 0755 "${WAKE_WORD_RUNTIME_DIR}/openwakeword"
@@ -212,6 +218,18 @@ install -m 0755 "${WAKE_WORD_SIDECAR_SOURCE}" "${INSTALLED_WAKE_WORD_SIDECAR}"
 install -m 0755 "${WAKE_WORD_RUNTIME_INSTALLER_SOURCE}" "${INSTALLED_WAKE_WORD_RUNTIME_INSTALLER}"
 install -m 0644 "${WAKE_WORD_REQUIREMENTS_SOURCE}" "${INSTALLED_WAKE_WORD_REQUIREMENTS}"
 install -m 0644 "${WAKE_WORD_SMOKE_TEST_SOURCE}" "${INSTALLED_WAKE_WORD_SMOKE_TEST}"
+
+BUZZASR_RUNTIME_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/${APP_ID}/buzzasr"
+install -d -m 0755 "${BUZZASR_RUNTIME_DIR}/buzzasr"
+install -m 0644 "${SCRIPT_DIR}/buzzasr_transcribe.py" "${BUZZASR_RUNTIME_DIR}/buzzasr_transcribe.py"
+install -m 0755 "${SCRIPT_DIR}/install-buzzasr-runtime.sh" "${BUZZASR_RUNTIME_DIR}/install-buzzasr-runtime.sh"
+install -m 0644 "${SCRIPT_DIR}/buzzasr/requirements.txt" "${BUZZASR_RUNTIME_DIR}/buzzasr/requirements.txt"
+
+PARAKEET_RUNTIME_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/${APP_ID}/parakeet"
+install -d -m 0755 "${PARAKEET_RUNTIME_DIR}/parakeet"
+install -m 0644 "${SCRIPT_DIR}/parakeet_transcribe.py" "${PARAKEET_RUNTIME_DIR}/parakeet_transcribe.py"
+install -m 0755 "${SCRIPT_DIR}/install-parakeet-runtime.sh" "${PARAKEET_RUNTIME_DIR}/install-parakeet-runtime.sh"
+install -m 0644 "${SCRIPT_DIR}/parakeet/requirements.txt" "${PARAKEET_RUNTIME_DIR}/parakeet/requirements.txt"
 
 echo "Installing icon to ${INSTALLED_ICON}"
 install -d -m 0755 "${ICON_DIR}"

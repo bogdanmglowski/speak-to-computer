@@ -76,6 +76,8 @@ def parse_args():
     parser.add_argument("--phrase", required=True, help="Wake-word phrase identifier")
     parser.add_argument("--threshold", required=True, type=float, help="Detection threshold from 0 to 1")
     parser.add_argument("--model-path", default="", help="Optional custom ONNX/TFLite model path")
+    parser.add_argument("--score-floor", type=float, default=0.0,
+                        help="Emit a 'score' event for every frame with score >= floor (debug)")
     return parser.parse_args()
 
 
@@ -131,6 +133,8 @@ def main():
                         continue
                 if score >= args.threshold:
                     emit("detected", score=score)
+                elif score >= args.score_floor:
+                    emit("score", score=score)
     except Exception as error:
         emit("error", message=f"Wake-word processing failed: {error}")
         return 5

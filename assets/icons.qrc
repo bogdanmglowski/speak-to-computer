@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file>speak-to-computer.svg</file>
+  </qresource>
+</RCC>

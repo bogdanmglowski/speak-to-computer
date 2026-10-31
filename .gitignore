@@ -1,5 +1,11 @@
+build/
 build-speak-to-computer/
 vendor/whisperer-cpp/
+scripts/simulstreaming-poc/SimulStreaming/
+scripts/simulstreaming-poc/.venv/
+scripts/simulstreaming-poc/sample-jfk.wav
+scripts/simulstreaming-poc/*.pt
+
 *.user
 *.autosave
 core
