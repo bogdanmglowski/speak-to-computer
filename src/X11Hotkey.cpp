@@ -273,8 +273,11 @@ void X11Hotkey::drainEvents()
         XNextEvent(display_, &event);
         if (event.type == KeyPress && matchesHotkey(event.xkey, keycode_, modifiers_)) {
             emit activated();
+        } else if (event.type == ButtonPress && event.xbutton.button == mouseButton_) {
+            emit pressed();
         } else if (event.type == ButtonRelease && event.xbutton.button == mouseButton_) {
             emit activated();
+            emit released();
         }
     }
 }

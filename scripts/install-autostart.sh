@@ -209,6 +209,8 @@ install -m 0644 "${ACTIVATION_SOUND_SOURCE}" "${INSTALLED_ACTIVATION_SOUND}"
 
 echo "Installing end sound to ${INSTALLED_END_SOUND}"
 install -m 0644 "${END_SOUND_SOURCE}" "${INSTALLED_END_SOUND}"
+install -d -m 0755 "${INSTALL_BIN_DIR}/sounds/soft"
+install -m 0644 "${PROJECT_ROOT}/assets/sounds/soft/"* "${INSTALL_BIN_DIR}/sounds/soft/"
 
 echo "Installing wake-word sidecar to ${INSTALLED_WAKE_WORD_SIDECAR}"
 install -d -m 0755 "${WAKE_WORD_RUNTIME_DIR}/openwakeword"
@@ -222,6 +224,12 @@ install -d -m 0755 "${BUZZASR_RUNTIME_DIR}/buzzasr"
 install -m 0644 "${SCRIPT_DIR}/buzzasr_transcribe.py" "${BUZZASR_RUNTIME_DIR}/buzzasr_transcribe.py"
 install -m 0755 "${SCRIPT_DIR}/install-buzzasr-runtime.sh" "${BUZZASR_RUNTIME_DIR}/install-buzzasr-runtime.sh"
 install -m 0644 "${SCRIPT_DIR}/buzzasr/requirements.txt" "${BUZZASR_RUNTIME_DIR}/buzzasr/requirements.txt"
+
+PARAKEET_RUNTIME_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/${APP_ID}/parakeet"
+install -d -m 0755 "${PARAKEET_RUNTIME_DIR}/parakeet"
+install -m 0644 "${SCRIPT_DIR}/parakeet_transcribe.py" "${PARAKEET_RUNTIME_DIR}/parakeet_transcribe.py"
+install -m 0755 "${SCRIPT_DIR}/install-parakeet-runtime.sh" "${PARAKEET_RUNTIME_DIR}/install-parakeet-runtime.sh"
+install -m 0644 "${SCRIPT_DIR}/parakeet/requirements.txt" "${PARAKEET_RUNTIME_DIR}/parakeet/requirements.txt"
 
 echo "Installing icon to ${INSTALLED_ICON}"
 install -d -m 0755 "${ICON_DIR}"

@@ -26,6 +26,8 @@ private:
     AppSettings baseSettings_;
     QLineEdit *hotkeyDictateEdit_ = nullptr;
     QLineEdit *hotkeyTranslateEnEdit_ = nullptr;
+    QSpinBox *pushToTalkButtonSpin_ = nullptr;
+    QCheckBox *pushToTalkEnterCheck_ = nullptr;
     QComboBox *engineCombo_ = nullptr;
     QComboBox *audioBackendCombo_ = nullptr;
     QLineEdit *languageEdit_ = nullptr;
@@ -36,6 +38,8 @@ private:
     QLineEdit *realtimeServerScriptEdit_ = nullptr;
     QLineEdit *buzzAsrPythonEdit_ = nullptr;
     QLineEdit *buzzAsrScriptEdit_ = nullptr;
+    QLineEdit *parakeetPythonEdit_ = nullptr;
+    QLineEdit *parakeetScriptEdit_ = nullptr;
     QLineEdit *dictionaryPathEdit_ = nullptr;
     QComboBox *pasteTargetCombo_ = nullptr;
     QCheckBox *miniOverlayCheck_ = nullptr;

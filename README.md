@@ -90,6 +90,24 @@ Optional runtime dependencies:
 - Wake word: local Python runtime for `openwakeword`
 - BuzzASR: NVIDIA GPU and the runtime installed below
 
+### Parakeet v3 and push-to-talk
+
+Install the Parakeet runtime with `bash scripts/install-parakeet-runtime.sh`.
+It downloads the multilingual model (about 2.5 GB) and CUDA dependencies. Select
+**Parakeet v3** in Preferences or the overlay. It detects the language from audio;
+it transcribes speech but does not translate to English or use dictionary prompts.
+
+On X11, hold push-to-talk to record and release to transcribe and paste. The
+default is X11 button 11, corresponding to Hex Mouse 7. Preferences lets you
+choose another X11 button or disable it with 0. Buttons 9 and 10 retain their
+existing behavior. Use `xev` to identify a physical button. Automatic Enter is
+off by default; enabling it can execute commands in a terminal. Push-to-talk
+ignores VAD auto-stop and always pastes, even when file handoff is selected.
+Push-to-talk requires a batch engine, not Realtime.
+
+The bundled soft start and stop sounds come from Hex and include its MIT license.
+Custom sound paths in Preferences remain unchanged.
+
 ### BuzzASR Polish engine
 
 Install the Python runtime separately from the fast app installer:

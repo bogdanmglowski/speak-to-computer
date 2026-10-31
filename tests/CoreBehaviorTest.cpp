@@ -3,6 +3,7 @@
 #include "BuzzAsrRunner.h"
 #include "ClipboardPaster.h"
 #include "OverlayWidget.h"
+#include "ParakeetRunner.h"
 #include "PreferencesDialog.h"
 #include "TranscriptCleaner.h"
 #include "VadEndpointDetector.h"
@@ -29,6 +30,10 @@ class CoreBehaviorTest : public QObject {
 
 private slots:
     void settingsShouldExpandHomePath();
+    void settingsShouldSaveParakeetAndPushToTalk();
+    void settingsShouldRejectReservedPushToTalkButtons();
+    void parakeetRunnerShouldHandleUnicodeAndErrors();
+    void parakeetRunnerShouldExcludeNxPreload();
     void settingsShouldMigrateTemporaryBuzzAsrRuntime();
     void buzzAsrShouldPreserveUnicodePathsWithoutUnsupportedPrompts();
     void buzzAsrShouldReportStartupErrorBeforeProcessExit();
@@ -156,6 +161,102 @@ QByteArray vadFrame(bool speech)
 }
 
 } // namespace
+
+void CoreBehaviorTest::settingsShouldSaveParakeetAndPushToTalk()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    AppSettings settings = AppSettings::loadFromPath(path);
+    QCOMPARE(settings.pushToTalkButton, 11);
+    QVERIFY(!settings.pushToTalkSendEnter);
+    settings.engine = QString::fromUtf8(AppSettings::kEngineParakeet);
+    settings.pushToTalkButton = 12;
+    settings.pushToTalkSendEnter = true;
+    QString errorMessage;
+    QVERIFY2(AppSettings::save(settings, &errorMessage), qPrintable(errorMessage));
+    const AppSettings loaded = AppSettings::loadFromPath(path);
+    QVERIFY(loaded.isParakeetEngine());
+    QVERIFY(!loaded.isWhisperCppEngine());
+    QCOMPARE(loaded.pushToTalkButton, 12);
+    QVERIFY(loaded.pushToTalkSendEnter);
+}
+
+void CoreBehaviorTest::settingsShouldRejectReservedPushToTalkButtons()
+{
+    QTemporaryDir dir;
+    AppSettings settings = AppSettings::loadFromPath(dir.filePath(QStringLiteral("settings.ini")));
+    QString errorMessage;
+    for (int button : {1, 7, 9, 10, 256}) {
+        settings.pushToTalkButton = button;
+        QVERIFY(!AppSettings::save(settings, &errorMessage));
+        QVERIFY(!errorMessage.isEmpty());
+    }
+    settings.pushToTalkButton = 0;
+    QVERIFY2(AppSettings::save(settings, &errorMessage), qPrintable(errorMessage));
+}
+
+void CoreBehaviorTest::parakeetRunnerShouldHandleUnicodeAndErrors()
+{
+    QTemporaryDir dir;
+    AppSettings settings;
+    settings.parakeetPython = QStringLiteral("/usr/bin/python3");
+    settings.parakeetScript = createFile(&dir, QStringLiteral("fake parakeet.py"), R"PY(
+import json, os, time
+with open(os.environ['INBOX'], 'a+', encoding='utf-8') as inbox:
+    inbox.seek(0, 2)
+    print(json.dumps({'ready': True}), flush=True)
+    while True:
+        line = inbox.readline()
+        if not line:
+            time.sleep(0.01)
+            continue
+        request = json.loads(line)
+        if request['wav_path'] == 'missing':
+            print(json.dumps({'error': 'missing audio'}), flush=True)
+        else:
+            print(json.dumps({'text': 'Zażółć ' + request['wav_path']}), flush=True)
+)PY");
+    ParakeetRunner runner;
+    QSignalSpy ready(&runner, &ParakeetRunner::transcriptionReady);
+    QSignalSpy failed(&runner, &ParakeetRunner::failed);
+    runner.transcribe(QStringLiteral("/audio/gęślą.wav"), settings);
+    QTRY_COMPARE_WITH_TIMEOUT(ready.count(), 1, 5000);
+    QCOMPARE(ready.at(0).at(0).toString(), QStringLiteral("Zażółć /audio/gęślą.wav"));
+    runner.transcribe(QStringLiteral("missing"), settings);
+    QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 5000);
+    QVERIFY(failed.at(0).at(0).toString().contains(QStringLiteral("missing audio")));
+}
+
+void CoreBehaviorTest::parakeetRunnerShouldExcludeNxPreload()
+{
+    QTemporaryDir dir;
+    const QByteArray previousPreload = qgetenv("LD_PRELOAD");
+    const bool hadPreload = qEnvironmentVariableIsSet("LD_PRELOAD");
+    const auto restoreEnvironment = qScopeGuard([&]() {
+        if (hadPreload) {
+            qputenv("LD_PRELOAD", previousPreload);
+        } else {
+            qunsetenv("LD_PRELOAD");
+        }
+    });
+    qputenv("LD_PRELOAD", "/usr/NX/lib/libnxegl.so:libc.so.6");
+    AppSettings settings;
+    settings.parakeetPython = QStringLiteral("/usr/bin/python3");
+    settings.parakeetScript = createFile(&dir, QStringLiteral("preload.py"), R"PY(
+import json, os, time
+with open(os.environ['INBOX'], 'a+', encoding='utf-8') as inbox:
+    inbox.seek(0, 2)
+    print(json.dumps({'ready': True}), flush=True)
+    while not inbox.readline():
+        time.sleep(0.01)
+    print(json.dumps({'text': os.environ.get('LD_PRELOAD', '')}), flush=True)
+)PY");
+    ParakeetRunner runner;
+    QSignalSpy ready(&runner, &ParakeetRunner::transcriptionReady);
+    runner.transcribe(QStringLiteral("/audio/test.wav"), settings);
+    QTRY_COMPARE_WITH_TIMEOUT(ready.count(), 1, 5000);
+    QCOMPARE(ready.at(0).at(0).toString(), QStringLiteral("libc.so.6"));
+}
 
 void CoreBehaviorTest::settingsShouldExpandHomePath()
 {

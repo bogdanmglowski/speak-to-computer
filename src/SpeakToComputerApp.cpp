@@ -58,6 +58,29 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
             stopRecording(currentOutputMode_);
         }
     });
+    connect(&pushToTalkHotkey_, &X11Hotkey::pressed, this, [this]() {
+        if (state_ != State::Idle || engineSwitchInProgress_) {
+            return;
+        }
+        if (settings_.isRealtimeEngine()) {
+            overlay_.showError(QStringLiteral("Push-to-talk requires a batch engine."));
+            return;
+        }
+        pushToTalkActive_ = true;
+        startRecording(OutputMode::Original, pushToTalkHotkey_.activeWindow());
+        pushToTalkActive_ = state_ == State::Recording;
+    });
+    connect(&pushToTalkHotkey_, &X11Hotkey::released, this, [this]() {
+        if (!pushToTalkActive_) {
+            return;
+        }
+        pushToTalkActive_ = false;
+        if (state_ == State::Recording) {
+            pushToTalkTranscription_ = true;
+            sendEnterAfterTranscription_ = settings_.pushToTalkSendEnter;
+            stopRecording(OutputMode::Original);
+        }
+    });
     connect(&translateHotkey_, &X11Hotkey::activated, this, [this]() {
         handleHotkey(OutputMode::English, translateHotkey_);
     });
@@ -88,6 +111,8 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&whisper_, &WhisperRunner::failed, this, &SpeakToComputerApp::handleTranscriptionFailed);
     connect(&buzzAsr_, &BuzzAsrRunner::transcriptionReady, this, &SpeakToComputerApp::handleTranscriptionReady);
     connect(&buzzAsr_, &BuzzAsrRunner::failed, this, &SpeakToComputerApp::handleTranscriptionFailed);
+    connect(&parakeet_, &ParakeetRunner::transcriptionReady, this, &SpeakToComputerApp::handleTranscriptionReady);
+    connect(&parakeet_, &ParakeetRunner::failed, this, &SpeakToComputerApp::handleTranscriptionFailed);
     connect(&realtime_, &RealtimeSidecar::sessionFailed, this, &SpeakToComputerApp::handleRealtimeSessionFailed);
     connect(&realtime_, &RealtimeSidecar::serverFailed, this, &SpeakToComputerApp::handleRealtimeServerFailed);
     connect(&realtime_, &RealtimeSidecar::transcriptionUpdated, this, [this](const QString &text) {
@@ -136,6 +161,12 @@ void SpeakToComputerApp::refreshModelUi()
         overlay_.setModelControlEnabled(false);
         return;
     }
+    if (settings_.isParakeetEngine()) {
+        overlay_.setModelLabel(QStringLiteral("v3"));
+        overlay_.setAvailableModelPaths({});
+        overlay_.setModelControlEnabled(false);
+        return;
+    }
     overlay_.setModelControlEnabled(true);
     if (settings_.isRealtimeEngine()) {
         overlay_.setModelLabel(AppSettings::realtimeModelLabel(settings_.realtimeModel));
@@ -158,7 +189,10 @@ void SpeakToComputerApp::refreshEngineUi()
 
 void SpeakToComputerApp::refreshLanguageUi()
 {
-    overlay_.setLanguageLabel(AppSettings::languageLabel(settings_.language));
+    // Parakeet detects the language from the audio, so the language setting does not apply.
+    overlay_.setLanguageLabel(settings_.isParakeetEngine()
+            ? QStringLiteral("auto")
+            : AppSettings::languageLabel(settings_.language));
 }
 
 void SpeakToComputerApp::refreshSendKeywordUi()
@@ -184,7 +218,7 @@ void SpeakToComputerApp::setOverlayRuntimeControlsEnabled(bool enabled)
 {
     overlay_.setModelControlEnabled(enabled);
     overlay_.setEngineControlEnabled(enabled);
-    overlay_.setLanguageControlEnabled(enabled);
+    overlay_.setLanguageControlEnabled(enabled && !settings_.isParakeetEngine());
     overlay_.setSendKeywordControlEnabled(enabled);
     overlay_.setPasteTargetControlEnabled(enabled);
 }
@@ -221,6 +255,9 @@ bool SpeakToComputerApp::start()
     } else {
         qInfo() << "listening for dictation mouse button 10";
     }
+    if (!registerPushToTalkButton(settings_.pushToTalkButton, &errorMessage)) {
+        qWarning().noquote() << errorMessage;
+    }
     qInfo().noquote() << "settings:" << settings_.settingsPath
                       << "engine:" << settings_.engine;
     refreshVadRuntimeStatus();
@@ -244,6 +281,25 @@ bool SpeakToComputerApp::start()
         }
     }
 
+    return true;
+}
+
+bool SpeakToComputerApp::registerPushToTalkButton(int button, QString *errorMessage)
+{
+    if (button == 0) {
+        pushToTalkHotkey_.unregisterHotkey();
+        return true;
+    }
+    if (button < 8 || button > 255 || button == 9 || button == 10) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Use X11 button 8 or 11-255, or 0 to disable.");
+        }
+        return false;
+    }
+    if (!pushToTalkHotkey_.registerMouseButton(static_cast<unsigned int>(button), errorMessage)) {
+        return false;
+    }
+    qInfo() << "listening for push-to-talk mouse button" << button;
     return true;
 }
 
@@ -272,6 +328,7 @@ void SpeakToComputerApp::startRecording(OutputMode outputMode, quint64 targetWin
     recordingStopRequested_ = false;
     vadEnabledForCurrentRecording_ = false;
     sendEnterAfterTranscription_ = false;
+    pushToTalkTranscription_ = false;
     vadEndpointDetector_.clear();
 
     QString errorMessage;
@@ -287,6 +344,12 @@ void SpeakToComputerApp::startRecording(OutputMode outputMode, quint64 targetWin
     if (settings_.isBuzzAsrEngine() && outputMode == OutputMode::English) {
         showErrorAndReturnIdle(
                 QStringLiteral("BuzzASR is Polish only and does not support Translate-to-English. "
+                               "Use the whisper.cpp engine or the dictation hotkey."));
+        return;
+    }
+    if (settings_.isParakeetEngine() && outputMode == OutputMode::English) {
+        showErrorAndReturnIdle(
+                QStringLiteral("Parakeet v3 does not translate to English. "
                                "Use the whisper.cpp engine or the dictation hotkey."));
         return;
     }
@@ -378,6 +441,8 @@ void SpeakToComputerApp::stopRecording(OutputMode outputMode)
         return;
     }
 
+    pushToTalkActive_ = false;
+
     if (settings_.isRealtimeEngine()) {
         Q_UNUSED(outputMode);
         stopRealtimeSession();
@@ -419,6 +484,10 @@ void SpeakToComputerApp::stopRecording(OutputMode outputMode)
         buzzAsr_.transcribe(currentWavPath_, settings_);
         return;
     }
+    if (settings_.isParakeetEngine()) {
+        parakeet_.transcribe(currentWavPath_, settings_);
+        return;
+    }
     AppSettings transcriptionSettings = settings_;
     transcriptionSettings.translateToEn = currentOutputMode_ == OutputMode::English;
     whisper_.transcribe(currentWavPath_, transcriptionSettings);
@@ -426,6 +495,7 @@ void SpeakToComputerApp::stopRecording(OutputMode outputMode)
 
 void SpeakToComputerApp::cancelRecording()
 {
+    pushToTalkActive_ = false;
     if (state_ != State::Recording) {
         overlay_.hide();
         return;
@@ -496,14 +566,14 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
     removeCurrentWav();
 
     if (text.isEmpty()) {
-        showAlertAndReturnIdle(QStringLiteral("Whisper did not return any text."));
+        showAlertAndReturnIdle(QStringLiteral("Transcription did not return any text."));
         return;
     }
 
-    bool useHandoff = settings_.outputTarget == QStringLiteral("handoff_file");
+    bool useHandoff = !pushToTalkTranscription_ && settings_.outputTarget == QStringLiteral("handoff_file");
     QString handoffText = text;
 
-    if (settings_.outputTarget == QStringLiteral("auto")) {
+    if (!pushToTalkTranscription_ && settings_.outputTarget == QStringLiteral("auto")) {
         const QString trimmed = text.trimmed();
         const QStringList triggerWords = settings_.handoffTriggerWords.split(QLatin1Char(','), Qt::SkipEmptyParts);
         useHandoff = false;
@@ -747,6 +817,7 @@ bool SpeakToComputerApp::applyEngineSelection(const QString &engineId, QString *
     settings_.engine = nextEngine;
     refreshEngineUi();
     refreshModelUi();
+    refreshLanguageUi();
 
     // Always drop Realtime server when leaving Live or when entering Batch.
     if (previousEngine == QString::fromUtf8(AppSettings::kEngineRealtime)
@@ -1072,7 +1143,8 @@ void SpeakToComputerApp::configureVadForCurrentRecording()
 {
     vadEnabledForCurrentRecording_ = false;
     vadEndpointDetector_.clear();
-    if (!settings_.vadAutostopEnabled) {
+    // Push-to-talk ends on release, so silence must not stop the recording.
+    if (!settings_.vadAutostopEnabled || pushToTalkActive_) {
         return;
     }
     if (!vadRuntimeAvailable_) {
@@ -1117,6 +1189,23 @@ bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const
         if (!QFileInfo::exists(settings_.buzzAsrScript)) {
             if (errorMessage != nullptr) {
                 *errorMessage = QStringLiteral("BuzzASR script missing: %1").arg(settings_.buzzAsrScript);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    if (settings_.isParakeetEngine()) {
+        if (!QFileInfo::exists(settings_.parakeetPython) || !QFileInfo(settings_.parakeetPython).isExecutable()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("Parakeet Python missing: %1\nRun scripts/install-parakeet-runtime.sh to install the runtime.")
+                        .arg(settings_.parakeetPython);
+            }
+            return false;
+        }
+        if (!QFileInfo::exists(settings_.parakeetScript)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("Parakeet script missing: %1").arg(settings_.parakeetScript);
             }
             return false;
         }
@@ -1289,9 +1378,21 @@ bool SpeakToComputerApp::applySettings(const AppSettings &newSettings, QString *
         return false;
     }
 
+    QString pushToTalkError;
+    if (!registerPushToTalkButton(newSettings.pushToTalkButton, &pushToTalkError)) {
+        dictateHotkey_.registerHotkey(settings_.hotkeyDictate, nullptr);
+        translateHotkey_.registerHotkey(settings_.hotkeyTranslateEn, nullptr);
+        registerPushToTalkButton(settings_.pushToTalkButton, nullptr);
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Push-to-talk: %1").arg(pushToTalkError);
+        }
+        return false;
+    }
+
     if (!AppSettings::save(newSettings, errorMessage)) {
         dictateHotkey_.registerHotkey(settings_.hotkeyDictate, nullptr);
         translateHotkey_.registerHotkey(settings_.hotkeyTranslateEn, nullptr);
+        registerPushToTalkButton(settings_.pushToTalkButton, nullptr);
         return false;
     }
 
@@ -1431,6 +1532,9 @@ QString SpeakToComputerApp::hotkeyFor(OutputMode outputMode) const
 
 QStringList SpeakToComputerApp::recordingHints() const
 {
+    if (pushToTalkActive_) {
+        return {QStringLiteral("Release push-to-talk to paste")};
+    }
     // One compact line — overlay keeps only the first secondary hint.
     return {
             QStringLiteral("%1 stop · %2 EN")

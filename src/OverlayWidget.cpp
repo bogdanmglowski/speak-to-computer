@@ -1056,6 +1056,11 @@ void OverlayWidget::showEngineMenu(const QPoint &globalPos)
     buzzAsrAction->setCheckable(true);
     buzzAsrAction->setChecked(engineLabel_.compare(QStringLiteral("BuzzASR"), Qt::CaseInsensitive) == 0);
 
+    QAction *parakeetAction = menu.addAction(QStringLiteral("Parakeet v3 (auto language)"));
+    parakeetAction->setData(QString::fromUtf8(AppSettings::kEngineParakeet));
+    parakeetAction->setCheckable(true);
+    parakeetAction->setChecked(engineLabel_.compare(QStringLiteral("Parakeet v3"), Qt::CaseInsensitive) == 0);
+
     QAction *selectedAction = menu.exec(globalPos);
     if (selectedAction != nullptr) {
         emit engineSelected(selectedAction->data().toString());

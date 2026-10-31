@@ -83,6 +83,15 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     hotkeyTranslateEnEdit_ = new QLineEdit(settings.hotkeyTranslateEn, hotkeysSection);
     hotkeysLayout->addRow(QStringLiteral("Dictation"), hotkeyDictateEdit_);
     hotkeysLayout->addRow(QStringLiteral("Translate to English"), hotkeyTranslateEnEdit_);
+    pushToTalkButtonSpin_ = new QSpinBox(hotkeysSection);
+    pushToTalkButtonSpin_->setRange(0, 255);
+    pushToTalkButtonSpin_->setValue(settings.pushToTalkButton);
+    pushToTalkButtonSpin_->setToolTip(QStringLiteral("X11 button number; 11 is Hex Mouse 7. 0 disables push-to-talk. Buttons 9 and 10 are reserved."));
+    pushToTalkEnterCheck_ = new QCheckBox(QStringLiteral("Press Enter after pasting"), hotkeysSection);
+    pushToTalkEnterCheck_->setChecked(settings.pushToTalkSendEnter);
+    pushToTalkEnterCheck_->setToolTip(QStringLiteral("Warning: Enter can execute commands in a terminal."));
+    hotkeysLayout->addRow(QStringLiteral("Push-to-talk X11 button"), pushToTalkButtonSpin_);
+    hotkeysLayout->addRow(QStringLiteral("Push-to-talk"), pushToTalkEnterCheck_);
     hotkeysSection->setLayout(hotkeysLayout);
     sectionsLayout->addWidget(hotkeysSection, 0, 0);
 
@@ -92,6 +101,7 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     engineCombo_->addItem(QStringLiteral("whisper.cpp"), QString::fromUtf8(AppSettings::kEngineWhisperCpp));
     engineCombo_->addItem(QStringLiteral("Realtime"), QString::fromUtf8(AppSettings::kEngineRealtime));
     engineCombo_->addItem(QStringLiteral("BuzzASR (Polish)"), QString::fromUtf8(AppSettings::kEngineBuzzAsr));
+    engineCombo_->addItem(QStringLiteral("Parakeet v3 (auto language)"), QString::fromUtf8(AppSettings::kEngineParakeet));
     {
         const int engineIndex = engineCombo_->findData(AppSettings::normalizeEngine(settings.engine));
         engineCombo_->setCurrentIndex(engineIndex >= 0 ? engineIndex : 0);
@@ -112,6 +122,8 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     realtimeServerScriptEdit_ = new QLineEdit(settings.realtimeServerScript, transcriptionSection);
     buzzAsrPythonEdit_ = new QLineEdit(settings.buzzAsrPython, transcriptionSection);
     buzzAsrScriptEdit_ = new QLineEdit(settings.buzzAsrScript, transcriptionSection);
+    parakeetPythonEdit_ = new QLineEdit(settings.parakeetPython, transcriptionSection);
+    parakeetScriptEdit_ = new QLineEdit(settings.parakeetScript, transcriptionSection);
     auto *dictionaryRow = new QWidget(transcriptionSection);
     auto *dictionaryLayout = new QHBoxLayout(dictionaryRow);
     dictionaryLayout->setContentsMargins(0, 0, 0, 0);
@@ -166,6 +178,8 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     transcriptionLayout->addRow(QStringLiteral("Realtime server script"), realtimeServerScriptEdit_);
     transcriptionLayout->addRow(QStringLiteral("BuzzASR Python"), buzzAsrPythonEdit_);
     transcriptionLayout->addRow(QStringLiteral("BuzzASR script"), buzzAsrScriptEdit_);
+    transcriptionLayout->addRow(QStringLiteral("Parakeet Python"), parakeetPythonEdit_);
+    transcriptionLayout->addRow(QStringLiteral("Parakeet script"), parakeetScriptEdit_);
     transcriptionLayout->addRow(QStringLiteral("Dictionary (Whisper / Realtime)"), dictionaryRow);
     transcriptionLayout->addRow(QStringLiteral("Threads"), threadsSpin_);
     transcriptionSection->setLayout(transcriptionLayout);
@@ -262,6 +276,7 @@ void PreferencesDialog::updateEngineFields()
     const bool realtime = engine == QString::fromUtf8(AppSettings::kEngineRealtime);
     const bool whisper = engine == QString::fromUtf8(AppSettings::kEngineWhisperCpp);
     const bool buzzAsr = engine == QString::fromUtf8(AppSettings::kEngineBuzzAsr);
+    const bool parakeet = engine == QString::fromUtf8(AppSettings::kEngineParakeet);
     whisperCliEdit_->setEnabled(whisper);
     modelEdit_->setEnabled(whisper);
     threadsSpin_->setEnabled(whisper);
@@ -270,6 +285,10 @@ void PreferencesDialog::updateEngineFields()
     realtimeServerScriptEdit_->setEnabled(realtime);
     buzzAsrPythonEdit_->setEnabled(buzzAsr);
     buzzAsrScriptEdit_->setEnabled(buzzAsr);
+    parakeetPythonEdit_->setEnabled(parakeet);
+    parakeetScriptEdit_->setEnabled(parakeet);
+    languageEdit_->setEnabled(!parakeet);
+    languageEdit_->setToolTip(parakeet ? QStringLiteral("Parakeet detects the language from audio.") : QString());
 }
 
 AppSettings PreferencesDialog::editedSettings() const
@@ -277,6 +296,8 @@ AppSettings PreferencesDialog::editedSettings() const
     AppSettings edited = baseSettings_;
     edited.hotkeyDictate = hotkeyDictateEdit_->text().trimmed();
     edited.hotkeyTranslateEn = hotkeyTranslateEnEdit_->text().trimmed();
+    edited.pushToTalkButton = pushToTalkButtonSpin_->value();
+    edited.pushToTalkSendEnter = pushToTalkEnterCheck_->isChecked();
     edited.engine = engineCombo_->currentData().toString();
     edited.audioBackend = audioBackendCombo_->currentText().trimmed();
     edited.language = languageEdit_->text().trimmed();
@@ -287,6 +308,8 @@ AppSettings PreferencesDialog::editedSettings() const
     edited.realtimeServerScript = realtimeServerScriptEdit_->text().trimmed();
     edited.buzzAsrPython = buzzAsrPythonEdit_->text().trimmed();
     edited.buzzAsrScript = buzzAsrScriptEdit_->text().trimmed();
+    edited.parakeetPython = parakeetPythonEdit_->text().trimmed();
+    edited.parakeetScript = parakeetScriptEdit_->text().trimmed();
     edited.dictionaryPath = dictionaryPathEdit_->text().trimmed();
     edited.pasteTarget = pasteTargetCombo_->currentData().toString();
     edited.miniOverlayEnabled = miniOverlayCheck_->isChecked();

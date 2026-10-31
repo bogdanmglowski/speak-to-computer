@@ -5,16 +5,17 @@
 
 struct AppSettings {
     // whisper_cpp = batch via whisper-cli; realtime = SimulStreaming GPU sidecar;
-    // buzzasr = batch via the BuzzASR/polish transformers sidecar
+    // buzzasr = batch via the BuzzASR/polish transformers sidecar; parakeet = batch via the Parakeet v3 GPU sidecar
     static constexpr auto kEngineWhisperCpp = "whisper_cpp";
     static constexpr auto kEngineRealtime = "realtime";
     static constexpr auto kEngineBuzzAsr = "buzzasr";
+    static constexpr auto kEngineParakeet = "parakeet";
     // pin = windowactivate pinned start window; focus = paste into current focus
     static constexpr auto kPasteTargetPin = "pin";
     static constexpr auto kPasteTargetFocus = "focus";
 
     QString settingsPath;
-    QString engine; // whisper_cpp | realtime | buzzasr
+    QString engine; // whisper_cpp | realtime | buzzasr | parakeet
     QString hotkeyDictate;
     QString hotkeyTranslateEn;
     QString audioBackend;
@@ -29,6 +30,12 @@ struct AppSettings {
     // Batch transcription via the BuzzASR/polish transformers sidecar.
     QString buzzAsrPython;
     QString buzzAsrScript;
+    // Batch transcription via the Parakeet v3 ONNX sidecar on the GPU.
+    QString parakeetPython;
+    QString parakeetScript;
+    // Push-to-talk: hold this X11 mouse button to record, release to transcribe and paste. 0 = off.
+    int pushToTalkButton = 11;
+    bool pushToTalkSendEnter = false;
     // Soft terminology bias (Whisper initial prompt / SimulStreaming static_init_prompt).
     // Empty path disables. File: one term per line, # comments.
     QString dictionaryPath;
@@ -59,6 +66,7 @@ struct AppSettings {
     bool isRealtimeEngine() const;
     bool isWhisperCppEngine() const;
     bool isBuzzAsrEngine() const;
+    bool isParakeetEngine() const;
     bool isPinPasteTarget() const;
     bool isFocusPasteTarget() const;
 

@@ -19,6 +19,8 @@ public:
 
 signals:
     void activated();
+    void pressed();
+    void released();
 
 private:
     void drainEvents();
