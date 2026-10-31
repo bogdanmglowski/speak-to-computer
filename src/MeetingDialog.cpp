@@ -1,9 +1,11 @@
 #include "MeetingDialog.h"
+#include "MeetingAnalysisDialog.h"
 
 #include <QApplication>
 #include <QCloseEvent>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDebug>
@@ -18,9 +20,13 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QSaveFile>
 #include <QShowEvent>
 #include <QSplitter>
@@ -32,6 +38,42 @@
 #include <QVBoxLayout>
 
 namespace {
+QString speakerDataPath(const MeetingEntry &entry)
+{
+    return QDir(entry.directory).filePath(QStringLiteral("speakers.json"));
+}
+
+bool saveSpeakers(const MeetingEntry &entry, const QJsonObject &document, QString *error)
+{
+    const QJsonArray segments = document.value(QStringLiteral("segments")).toArray();
+    if (segments.isEmpty()) { *error = QStringLiteral("No speaker segments returned."); return false; }
+    QString text;
+    for (const QJsonValue &value : segments) {
+        const QJsonObject segment = value.toObject();
+        if (!segment.value(QStringLiteral("start")).isDouble() || !segment.value(QStringLiteral("speaker")).isString()
+                || !segment.value(QStringLiteral("text")).isString()) {
+            *error = QStringLiteral("Invalid speaker segment returned."); return false;
+        }
+        const qint64 seconds = qMax<qint64>(0, static_cast<qint64>(segment.value(QStringLiteral("start")).toDouble()));
+        text += QStringLiteral("[%1:%2:%3] %4: %5\n")
+                .arg(seconds / 3600, 2, 10, QLatin1Char('0')).arg((seconds / 60) % 60, 2, 10, QLatin1Char('0'))
+                .arg(seconds % 60, 2, 10, QLatin1Char('0'))
+                .arg(segment.value(QStringLiteral("speaker")).toString(), segment.value(QStringLiteral("text")).toString());
+    }
+    QSaveFile json(speakerDataPath(entry));
+    QSaveFile transcript(MeetingStore::transcriptPath(entry));
+    const QByteArray jsonBytes = QJsonDocument(document).toJson();
+    const QByteArray textBytes = text.toUtf8();
+    if (!json.open(QIODevice::WriteOnly) || json.write(jsonBytes) != jsonBytes.size()
+            || !transcript.open(QIODevice::WriteOnly) || transcript.write(textBytes) != textBytes.size()) {
+        *error = QStringLiteral("Could not write speaker transcript."); return false;
+    }
+    if (!json.commit() || !transcript.commit()) {
+        *error = QStringLiteral("Could not save speaker transcript."); return false;
+    }
+    return true;
+}
+
 QString commandOutput(const QStringList &args, QString *error)
 {
     QProcess process;
@@ -202,25 +244,49 @@ MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper
     stop_->setObjectName(QStringLiteral("meetingStop"));
     transcribe_ = new QPushButton(QStringLiteral("Transcribe"), this);
     transcribe_->setObjectName(QStringLiteral("meetingTranscribe"));
+    transcribeSpeakers_ = new QPushButton(QStringLiteral("Transcribe with speakers"), this);
+    transcribeSpeakers_->setObjectName(QStringLiteral("meetingTranscribeSpeakers"));
+    renameSpeaker_ = new QPushButton(QStringLiteral("Name speaker"), this);
+    renameSpeaker_->setObjectName(QStringLiteral("meetingRenameSpeaker"));
     play_ = new QPushButton(QStringLiteral("Play"), this);
     open_ = new QPushButton(QStringLiteral("Open folder"), this);
     transcript_ = new QPushButton(QStringLiteral("Open transcript"), this);
     copy_ = new QPushButton(QStringLiteral("Copy transcript"), this);
+    analysis_ = new QPushButton(QStringLiteral("Analyze transcript"), this);
+    analysis_->setObjectName(QStringLiteral("meetingAnalyze"));
     rename_ = new QPushButton(QStringLiteral("Rename"), this);
     remove_ = new QPushButton(QStringLiteral("Delete"), this);
     auto *closeWindow = new QPushButton(QStringLiteral("Close window"), this);
     closeWindow->setObjectName(QStringLiteral("meetingCloseWindow"));
     closeWindow->setToolTip(QStringLiteral("Hide this window without stopping an active recording."));
-    const QList<QPushButton *> all{record_, stop_, transcribe_, play_, open_, transcript_, copy_, rename_, remove_, closeWindow};
+    const QList<QPushButton *> all{record_, stop_, transcribe_, transcribeSpeakers_, renameSpeaker_, play_, open_, transcript_, copy_, analysis_, rename_, remove_, closeWindow};
     for (int i = 0; i < all.size(); ++i) buttons->addWidget(all[i], i / 5, i % 5);
     layout->addLayout(buttons);
     status_ = new QLabel(this);
+    status_->setObjectName(QStringLiteral("meetingStatus"));
     status_->setWordWrap(true);
     layout->addWidget(status_);
+    transcriptionProgress_ = new QProgressBar(this);
+    transcriptionProgress_->setObjectName(QStringLiteral("meetingTranscriptionProgress"));
+    transcriptionProgress_->hide();
+    layout->addWidget(transcriptionProgress_);
     connect(refreshDevices, &QPushButton::clicked, this, &MeetingDialog::loadSources);
     connect(record_, &QPushButton::clicked, this, &MeetingDialog::startRecording);
     connect(stop_, &QPushButton::clicked, this, &MeetingDialog::stopRecording);
     connect(transcribe_, &QPushButton::clicked, this, &MeetingDialog::startTranscription);
+    connect(transcribeSpeakers_, &QPushButton::clicked, this, &MeetingDialog::startSpeakerTranscription);
+    connect(renameSpeaker_, &QPushButton::clicked, this, &MeetingDialog::renameSpeaker);
+    connect(analysis_, &QPushButton::clicked, this, [this]() {
+        if (isBusy() || !appIdle_()) return;
+        MeetingAnalysisDialog dialog(selectedEntry(), settings_, this);
+        connect(&dialog, &MeetingAnalysisDialog::busyChanged, this, [this](bool busy) {
+            setJob(busy ? Job::Analyzing : Job::None);
+            emit activityChanged();
+        });
+        connect(&dialog, &MeetingAnalysisDialog::analysisSaved, this, &MeetingDialog::refresh);
+        dialog.exec();
+        if (job_ == Job::Analyzing) { setJob(Job::None); emit activityChanged(); }
+    });
     connect(hideToTray, &QPushButton::clicked, this, &QWidget::close);
     connect(closeWindow, &QPushButton::clicked, this, &QWidget::close);
     connect(table_, &QTableWidget::itemSelectionChanged, this, [this]() {
@@ -253,20 +319,30 @@ MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper
         refresh();
     });
     connect(&process_, &QProcess::readyReadStandardError, this, [this]() {
-        errors_.append(process_.readAllStandardError());
+        const QByteArray chunk = process_.readAllStandardError();
+        if (job_ == Job::Diarizing) consumeDiarizationError(chunk);
+        else errors_.append(chunk);
         if (errors_.size() > 32768) errors_.remove(0, errors_.size() - 32768);
     });
-    connect(&process_, &QProcess::readyReadStandardOutput, this, [this]() { process_.readAllStandardOutput(); });
+    connect(&process_, &QProcess::readyReadStandardOutput, this, [this]() {
+        const QByteArray output = process_.readAllStandardOutput();
+        if (job_ == Job::Diarizing) outputBuffer_.append(output);
+    });
     connect(&process_, &QProcess::finished, this, &MeetingDialog::processFinished);
     connect(&process_, &QProcess::errorOccurred, this, &MeetingDialog::processError);
     connect(whisper_, &WhisperRunner::transcriptionReady, this, [this](const QString &text) { if (ownsWhisper()) finishWhisper(text, {}); });
     connect(whisper_, &WhisperRunner::failed, this, [this](const QString &error) { if (ownsWhisper()) finishWhisper({}, error); });
+    connect(whisper_, &WhisperRunner::progressChanged, this, [this](int percent) {
+        if (ownsWhisper()) setTranscriptionProgress(QStringLiteral("Transcribing meeting"), percent);
+    });
     auto *timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, [this]() {
         if (job_ == Job::Recording && !stopping_) {
             status_->setText(QStringLiteral("Recording %1").arg(duration(elapsed_.elapsed() / 1000)));
             emit activityChanged();
         }
+        if (job_ == Job::Converting || job_ == Job::Whisper || job_ == Job::Diarizing)
+            updateTranscriptionStatus();
         updateRecordingIndicator();
         updateDetails();
         updateButtons();
@@ -296,7 +372,8 @@ MeetingDialog::~MeetingDialog()
         process_.waitForBytesWritten(1000);
         if (!process_.waitForFinished(5000)) { forcedStop_ = true; process_.kill(); process_.waitForFinished(1000); }
     } else if (process_.state() != QProcess::NotRunning) {
-        process_.kill(); process_.waitForFinished(1000);
+        process_.terminate();
+        if (!process_.waitForFinished(2000)) { process_.kill(); process_.waitForFinished(1000); }
     }
     if (!temporaryWav_.isEmpty()) QFile::remove(temporaryWav_);
 }
@@ -312,16 +389,93 @@ QString MeetingDialog::activityStatus() const
         if (stopping_) return QStringLiteral("Finishing meeting recording…");
         return QStringLiteral("Recording meeting — %1").arg(duration(elapsed_.elapsed() / 1000));
     }
-    if (job_ == Job::Converting || job_ == Job::Whisper) return QStringLiteral("Transcribing meeting.");
+    if (job_ == Job::Converting || job_ == Job::Whisper || job_ == Job::Diarizing) return QStringLiteral("Transcribing meeting.");
+    if (job_ == Job::Analyzing) return QStringLiteral("Analyzing meeting.");
     return {};
 }
 void MeetingDialog::setJob(Job job)
 {
     job_ = job;
+    if (job == Job::None) transcriptionProgress_->hide();
     updateButtons();
     updateDetails();
     updateRecordingIndicator();
     emit busyChanged();
+}
+
+void MeetingDialog::setTranscriptionProgress(const QString &stage, int percent)
+{
+    if (stage != transcriptionStage_) {
+        transcriptionStage_ = stage;
+        transcriptionPercent_ = -1;
+        stageElapsed_.start();
+    }
+    if (percent >= 0 && percent <= 100 && percent > transcriptionPercent_) transcriptionPercent_ = percent;
+    updateTranscriptionStatus();
+}
+
+QString MeetingDialog::transcriptionDuration() const
+{
+    return duration(transcriptionElapsed_.isValid() ? transcriptionElapsed_.elapsed() / 1000 : 0);
+}
+
+void MeetingDialog::updateTranscriptionStatus()
+{
+    if (!transcriptionElapsed_.isValid() || transcriptionStage_.isEmpty()) return;
+    QString text = transcriptionStage_;
+    if (transcriptionPercent_ >= 0) {
+        transcriptionProgress_->setRange(0, 100);
+        transcriptionProgress_->setValue(transcriptionPercent_);
+        text += QStringLiteral(": %1%").arg(transcriptionPercent_);
+    } else {
+        transcriptionProgress_->setRange(0, 0);
+    }
+    text += QStringLiteral("  ·  Elapsed: %1").arg(transcriptionDuration());
+    if (transcriptionPercent_ >= 10 && transcriptionPercent_ < 100 && stageElapsed_.elapsed() >= 10000) {
+        const qint64 remaining = stageElapsed_.elapsed() * (100 - transcriptionPercent_) / transcriptionPercent_ / 1000;
+        text += QStringLiteral("  ·  Stage remaining (estimate): %1").arg(duration(remaining));
+    }
+    status_->setText(text);
+}
+
+void MeetingDialog::consumeDiarizationError(const QByteArray &chunk, bool final)
+{
+    diarizationErrorPending_.append(chunk);
+    qsizetype end;
+    while ((end = diarizationErrorPending_.indexOf('\n')) >= 0 || (final && !diarizationErrorPending_.isEmpty())) {
+        if (end < 0) end = diarizationErrorPending_.size();
+        const QByteArray line = diarizationErrorPending_.left(end);
+        diarizationErrorPending_.remove(0, qMin(end + 1, diarizationErrorPending_.size()));
+        if (line.startsWith("STC_PROGRESS ")) {
+            const QJsonObject event = QJsonDocument::fromJson(line.mid(13)).object();
+            const QString key = event.value(QStringLiteral("stage")).toString();
+            const QMap<QString, QString> stages{
+                    {QStringLiteral("loading_model"), QStringLiteral("Loading speaker model")},
+                    {QStringLiteral("prepare_microphone"), QStringLiteral("Preparing microphone audio")},
+                    {QStringLiteral("transcribe_microphone"), QStringLiteral("Transcribing microphone")},
+                    {QStringLiteral("prepare_remote"), QStringLiteral("Preparing remote audio")},
+                    {QStringLiteral("transcribe_remote"), QStringLiteral("Transcribing remote speakers")},
+                    {QStringLiteral("speaker_segmentation"), QStringLiteral("Detecting speech")},
+                    {QStringLiteral("speaker_counting"), QStringLiteral("Counting speakers")},
+                    {QStringLiteral("speaker_embeddings"), QStringLiteral("Identifying speakers")},
+                    {QStringLiteral("speaker_finalize"), QStringLiteral("Finalizing speaker identification")},
+                    {QStringLiteral("saving"), QStringLiteral("Preparing transcript")}};
+            const auto it = stages.constFind(key);
+            if (it != stages.cend()) {
+                const QJsonValue value = event.value(QStringLiteral("percent"));
+                const int percent = value.isDouble() ? value.toInt(-1) : -1;
+                setTranscriptionProgress(it.value(), percent >= 0 && percent <= 100 ? percent : -1);
+                continue;
+            }
+        }
+        errors_ += line + '\n';
+        if (errors_.size() > 32768) errors_.remove(0, errors_.size() - 32768);
+    }
+    if (diarizationErrorPending_.size() > 32768) {
+        errors_ += diarizationErrorPending_.left(diarizationErrorPending_.size() - 1024);
+        diarizationErrorPending_ = diarizationErrorPending_.right(1024);
+        if (errors_.size() > 32768) errors_.remove(0, errors_.size() - 32768);
+    }
 }
 void MeetingDialog::report(const QString &message) {
     status_->setText(message);
@@ -371,7 +525,7 @@ void MeetingDialog::refresh()
         QString state = entry.status;
         if (state == QStringLiteral("Recording") && (job_ != Job::Recording || current_.directory != entry.directory)) state = QStringLiteral("Interrupted");
         else if (state == QStringLiteral("Transcribing")
-                && ((job_ != Job::Converting && job_ != Job::Whisper) || current_.directory != entry.directory))
+                && ((job_ != Job::Converting && job_ != Job::Whisper && job_ != Job::Diarizing) || current_.directory != entry.directory))
             state = QStringLiteral("Transcription interrupted");
         else if (QFileInfo::exists(MeetingStore::transcriptPath(entry)) && state == QStringLiteral("Ready")) state = QStringLiteral("Transcribed");
         const QStringList values{entry.name, entry.started.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")), duration(entry.durationSeconds), state};
@@ -392,6 +546,9 @@ void MeetingDialog::updateButtons()
     record_->setEnabled(idle && microphone_->count() && output_->count());
     stop_->setEnabled(job_ == Job::Recording && !stopping_);
     transcribe_->setEnabled(idle && audio && !whisper_->isRunning());
+    transcribeSpeakers_->setEnabled(idle && audio && !whisper_->isRunning());
+    renameSpeaker_->setEnabled(idle && selected && QFileInfo::exists(speakerDataPath(entry)));
+    analysis_->setEnabled(idle && text);
     play_->setEnabled(!isBusy() && audio);
     open_->setEnabled(selected);
     transcript_->setEnabled(text);
@@ -418,7 +575,7 @@ void MeetingDialog::updateDetails()
     if (state == QStringLiteral("Recording") && (job_ != Job::Recording || current_.directory != entry.directory)) {
         state = QStringLiteral("Interrupted");
     } else if (state == QStringLiteral("Transcribing")
-            && ((job_ != Job::Converting && job_ != Job::Whisper) || current_.directory != entry.directory)) {
+            && ((job_ != Job::Converting && job_ != Job::Whisper && job_ != Job::Diarizing) || current_.directory != entry.directory)) {
         state = QStringLiteral("Transcription interrupted");
     } else if (QFileInfo::exists(MeetingStore::transcriptPath(entry)) && state == QStringLiteral("Ready")) {
         state = QStringLiteral("Transcribed");
@@ -483,6 +640,7 @@ void MeetingDialog::startRecording()
     if (!MeetingStore::create(settings_.meetingsDirectory, &current_, &error)) { report(error); return; }
     errors_.clear(); stopping_ = false; forcedStop_ = false; elapsed_.start();
     setJob(Job::Recording);
+    process_.setProcessEnvironment(QProcessEnvironment::systemEnvironment());
     const QString filter = QStringLiteral("[0:a]aresample=48000:async=1:first_pts=0,aformat=sample_fmts=s16:channel_layouts=mono[m];[1:a]aresample=48000:async=1:first_pts=0,aformat=sample_fmts=s16:channel_layouts=mono[o];[m][o]amerge=inputs=2[out]");
     process_.start(QStringLiteral("ffmpeg"), {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"),
             QStringLiteral("-f"), QStringLiteral("pulse"), QStringLiteral("-i"), microphone_->currentData().toString(),
@@ -527,17 +685,93 @@ void MeetingDialog::startTranscription()
     current_.status = QStringLiteral("Transcribing");
     if (!saveEntry(current_)) return;
     errors_.clear();
+    transcriptionElapsed_.start(); transcriptionStage_.clear();
     setJob(Job::Converting);
+    transcriptionProgress_->show();
+    setTranscriptionProgress(QStringLiteral("Preparing audio for transcription"));
+    process_.setProcessEnvironment(QProcessEnvironment::systemEnvironment());
     process_.start(QStringLiteral("ffmpeg"), {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"),
             QStringLiteral("-i"), MeetingStore::audioPath(current_), QStringLiteral("-ac"), QStringLiteral("1"),
             QStringLiteral("-ar"), QStringLiteral("16000"), QStringLiteral("-c:a"), QStringLiteral("pcm_s16le"), QStringLiteral("-y"), temporaryWav_});
-    status_->setText(QStringLiteral("Preparing audio for transcription…"));
     refresh();
+}
+
+void MeetingDialog::startSpeakerTranscription()
+{
+    if (isBusy() || !appIdle_() || whisper_->isRunning()) return;
+    current_ = selectedEntry();
+    if (current_.directory.isEmpty() || !QFileInfo::exists(MeetingStore::audioPath(current_))) return;
+    const QString runtime = settings_.diarizationRuntimeDirectory.isEmpty()
+            ? QDir::home().filePath(QStringLiteral(".local/share/speak-to-computer/diarization/.venv"))
+            : settings_.diarizationRuntimeDirectory;
+    const QString python = qEnvironmentVariable("STC_DIARIZATION_PYTHON", QDir(runtime).filePath(QStringLiteral("bin/python")));
+    const QString script = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("meeting_diarization.py"));
+    if (!QFileInfo::exists(python) || !QFileInfo::exists(script)) {
+        report(QStringLiteral("Speaker diarization runtime is missing. See the Meeting recordings section in README for setup."));
+        return;
+    }
+    current_.status = QStringLiteral("Transcribing");
+    if (!saveEntry(current_)) return;
+    errors_.clear(); outputBuffer_.clear(); diarizationErrorPending_.clear();
+    transcriptionElapsed_.start(); transcriptionStage_.clear();
+    setJob(Job::Diarizing);
+    transcriptionProgress_->show();
+    setTranscriptionProgress(QStringLiteral("Starting speaker transcription"));
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    if (!settings_.huggingFaceToken.isEmpty()) environment.insert(QStringLiteral("HF_TOKEN"), settings_.huggingFaceToken);
+    if (!settings_.huggingFaceHome.isEmpty()) {
+        environment.insert(QStringLiteral("HF_HOME"), settings_.huggingFaceHome);
+        environment.remove(QStringLiteral("HF_HUB_CACHE"));
+        environment.remove(QStringLiteral("HUGGINGFACE_HUB_CACHE"));
+    }
+    process_.setProcessEnvironment(environment);
+    process_.start(python, {script, QStringLiteral("--audio"), MeetingStore::audioPath(current_),
+            QStringLiteral("--whisper"), settings_.whisperCli, QStringLiteral("--model"), settings_.model,
+            QStringLiteral("--language"), settings_.language, QStringLiteral("--threads"), QString::number(settings_.threads)});
+    refresh();
+}
+
+void MeetingDialog::renameSpeaker()
+{
+    const MeetingEntry entry = selectedEntry();
+    QFile file(speakerDataPath(entry));
+    if (!file.open(QIODevice::ReadOnly)) { report(file.errorString()); return; }
+    QJsonParseError parseError;
+    QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) { report(QStringLiteral("Invalid speaker data.")); return; }
+    QJsonObject root = document.object();
+    QJsonArray segments = root.value(QStringLiteral("segments")).toArray();
+    QStringList speakers;
+    for (const QJsonValue &value : segments) {
+        const QString name = value.toObject().value(QStringLiteral("speaker")).toString();
+        if (!name.isEmpty() && name != QStringLiteral("Ja") && name != QStringLiteral("Osoba nieustalona")
+                && !speakers.contains(name)) speakers.append(name);
+    }
+    if (speakers.isEmpty()) { report(QStringLiteral("No remote speakers found.")); return; }
+    bool ok = false;
+    const QString previous = QInputDialog::getItem(this, QStringLiteral("Name speaker"), QStringLiteral("Speaker"), speakers, 0, false, &ok);
+    if (!ok) return;
+    const QString name = QInputDialog::getText(this, QStringLiteral("Name speaker"), QStringLiteral("Name"), QLineEdit::Normal, previous, &ok).trimmed();
+    if (!ok || name.isEmpty() || name == previous) return;
+    if (name.contains(QLatin1Char('\n')) || name.contains(QLatin1Char('\r')) || name == QStringLiteral("Ja")
+            || name == QStringLiteral("Osoba nieustalona") || speakers.contains(name)) {
+        report(QStringLiteral("Choose a unique single-line name other than Ja.")); return;
+    }
+    for (qsizetype i = 0; i < segments.size(); ++i) {
+        QJsonObject segment = segments[i].toObject();
+        if (segment.value(QStringLiteral("speaker")).toString() == previous) {
+            segment.insert(QStringLiteral("speaker"), name); segments[i] = segment;
+        }
+    }
+    root.insert(QStringLiteral("segments"), segments);
+    QString error;
+    if (!saveSpeakers(entry, root, &error)) report(error);
+    else { status_->setText(QStringLiteral("Speaker name saved.")); refresh(); }
 }
 
 void MeetingDialog::processError(QProcess::ProcessError error)
 {
-    if (error == QProcess::FailedToStart && (job_ == Job::Recording || job_ == Job::Converting)) {
+    if (error == QProcess::FailedToStart && (job_ == Job::Recording || job_ == Job::Converting || job_ == Job::Diarizing)) {
         errors_.append(process_.errorString().toUtf8());
         processFinished(-1, QProcess::CrashExit);
     }
@@ -545,8 +779,12 @@ void MeetingDialog::processError(QProcess::ProcessError error)
 
 void MeetingDialog::processFinished(int code, QProcess::ExitStatus exitStatus)
 {
-    errors_.append(process_.readAllStandardError());
-    const QString details = QString::fromUtf8(errors_).trimmed();
+    if (job_ == Job::Diarizing) consumeDiarizationError(process_.readAllStandardError(), true);
+    else errors_.append(process_.readAllStandardError());
+    QString details = QString::fromUtf8(errors_).trimmed();
+    if (!settings_.huggingFaceToken.isEmpty()) details.replace(settings_.huggingFaceToken, QStringLiteral("[token hidden]"));
+    const QString envToken = qEnvironmentVariable("HF_TOKEN");
+    if (!envToken.isEmpty()) details.replace(envToken, QStringLiteral("[token hidden]"));
     if (job_ == Job::Recording) {
         current_.durationSeconds = elapsed_.isValid() ? elapsed_.elapsed() / 1000 : 0;
         const bool ok = stopping_ && !forcedStop_ && exitStatus == QProcess::NormalExit && code == 0
@@ -558,17 +796,34 @@ void MeetingDialog::processFinished(int code, QProcess::ExitStatus exitStatus)
         if (!ok) report(QStringLiteral("Recording did not finish successfully. Any captured audio has been kept in %1. %2")
                 .arg(current_.directory, details));
         else status_->setText(QStringLiteral("Recording saved."));
+    } else if (job_ == Job::Diarizing) {
+        outputBuffer_.append(process_.readAllStandardOutput());
+        setTranscriptionProgress(QStringLiteral("Saving transcript"));
+        QString failure;
+        if (exitStatus != QProcess::NormalExit || code != 0) failure = QStringLiteral("Speaker transcription failed: %1").arg(details);
+        else {
+            QJsonParseError parseError;
+            const QJsonDocument doc = QJsonDocument::fromJson(outputBuffer_, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) failure = QStringLiteral("Invalid output from speaker transcription.");
+            else saveSpeakers(current_, doc.object(), &failure);
+        }
+        current_.status = failure.isEmpty() ? QStringLiteral("Ready") : QStringLiteral("Transcription failed");
+        const QString elapsed = transcriptionDuration();
+        saveEntry(current_); setJob(Job::None); refresh();
+        if (!failure.isEmpty()) report(QStringLiteral("%1\nElapsed: %2").arg(failure, elapsed));
+        else status_->setText(QStringLiteral("Speaker transcription saved. Elapsed: %1").arg(elapsed));
     } else if (job_ == Job::Converting) {
         if (exitStatus != QProcess::NormalExit || code != 0 || QFileInfo(temporaryWav_).size() == 0) {
             QFile::remove(temporaryWav_); temporaryWav_.clear();
             current_.status = QStringLiteral("Transcription failed");
+            const QString elapsed = transcriptionDuration();
             saveEntry(current_);
             setJob(Job::None); refresh();
-            report(QStringLiteral("Could not prepare the recording for transcription: %1").arg(details));
+            report(QStringLiteral("Could not prepare the recording for transcription: %1\nElapsed: %2").arg(details, elapsed));
             return;
         }
         setJob(Job::Whisper);
-        status_->setText(QStringLiteral("Transcribing meeting…"));
+        setTranscriptionProgress(QStringLiteral("Transcribing meeting"));
         AppSettings options = settings_;
         options.translateToEn = false;
         whisper_->transcribe(temporaryWav_, options, true);
@@ -577,6 +832,7 @@ void MeetingDialog::processFinished(int code, QProcess::ExitStatus exitStatus)
 
 void MeetingDialog::finishWhisper(const QString &text, const QString &error)
 {
+    setTranscriptionProgress(QStringLiteral("Saving transcript"));
     if (!temporaryWav_.isEmpty()) { QFile::remove(temporaryWav_); temporaryWav_.clear(); }
     QString failure = error;
     if (failure.isEmpty() && text.trimmed().isEmpty()) failure = QStringLiteral("Whisper returned no text.");
@@ -585,10 +841,12 @@ void MeetingDialog::finishWhisper(const QString &text, const QString &error)
         const QByteArray data = (text.trimmed() + QLatin1Char('\n')).toUtf8();
         if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit())
             failure = QStringLiteral("Could not save transcript: %1").arg(file.errorString());
+        else QFile::remove(speakerDataPath(current_));
     }
     current_.status = failure.isEmpty() ? QStringLiteral("Ready") : QStringLiteral("Transcription failed");
+    const QString elapsed = transcriptionDuration();
     saveEntry(current_);
     setJob(Job::None); refresh();
-    if (!failure.isEmpty()) report(failure);
-    else status_->setText(QStringLiteral("Transcription saved."));
+    if (!failure.isEmpty()) report(QStringLiteral("%1\nElapsed: %2").arg(failure, elapsed));
+    else status_->setText(QStringLiteral("Transcription saved. Elapsed: %1").arg(elapsed));
 }

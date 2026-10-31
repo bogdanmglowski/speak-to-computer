@@ -3,18 +3,31 @@
 #include "AppSettings.h"
 
 #include <QDialog>
+#include <QProcess>
 
 class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLineEdit;
 class QSpinBox;
+class QLabel;
+class QPushButton;
+class QDialogButtonBox;
 
 class PreferencesDialog : public QDialog {
 public:
     explicit PreferencesDialog(const AppSettings &settings, QWidget *parent = nullptr);
 
     AppSettings editedSettings() const;
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
+    void reject() override;
+
+private:
+    void startDiarizationSetup();
+    void nextDiarizationSetupStep();
+    void finishDiarizationSetup(const QString &message);
 
 private:
     AppSettings baseSettings_;
@@ -42,4 +55,19 @@ private:
     QLineEdit *handoffDirectoryEdit_ = nullptr;
     QLineEdit *handoffTriggerWordsEdit_ = nullptr;
     QLineEdit *meetingsDirectoryEdit_ = nullptr;
+    QLineEdit *huggingFaceTokenEdit_ = nullptr;
+    QLineEdit *huggingFaceHomeEdit_ = nullptr;
+    QLineEdit *diarizationRuntimeEdit_ = nullptr;
+    QLineEdit *analysisOllamaUrlEdit_ = nullptr;
+    QLineEdit *analysisCodexCliEdit_ = nullptr;
+    QLabel *analysisCheckStatus_ = nullptr;
+    QProcess ollamaCheckProcess_;
+    QLabel *diarizationStatus_ = nullptr;
+    QPushButton *diarizationSetup_ = nullptr;
+    QPushButton *diarizationStop_ = nullptr;
+    QDialogButtonBox *buttonBox_ = nullptr;
+    QProcess setupProcess_;
+    int setupStage_ = 0;
+    bool setupStopping_ = false;
+    QByteArray setupOutput_;
 };
