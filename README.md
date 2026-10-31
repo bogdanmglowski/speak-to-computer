@@ -404,7 +404,97 @@ Select a recording and choose **Transcribe** to run the configured Whisper model
 locally. The app prepares temporary 16 kHz mono audio and preserves timestamps in
 the transcript. Dictation and meeting processing cannot run concurrently. If a
 recording or transcription is interrupted, its audio is kept for recovery or a
-retry. Speaker identification and meeting summaries are not yet provided.
+retry.
+
+Both transcription modes display the current processing stage and elapsed time.
+When the current stage reports progress, the window also shows a percentage and,
+once enough progress is available, an approximate remaining time for that stage.
+
+#### Meeting analysis
+
+Select a transcribed recording and click **Analyze transcript**. Choose Ollama
+(the default) or Codex CLI, select a model and click **Analyze**. The model
+list can be refreshed in this window; the Codex list comes from its local model
+cache and may be outdated. A model ID can also be entered manually. The Polish note includes a
+brief overview, substantive topics, agreed tasks, decisions, and open questions
+or unresolved proposals. Source timestamps are shown where the model identifies a matching
+transcript segment. Check important items against the transcript: neither source
+references nor the model's output guarantee factual accuracy.
+
+For Codex CLI, choose a **Reasoning effort** in the analysis window. `Default` uses
+Codex's built-in default; supported levels depend on the model. Codex runs
+non-interactively in a read-only sandbox, without loading user configuration or
+persisting its session; transcript content is passed via stdin. The configured
+Codex CLI must be signed in with ChatGPT. Requests are sent to OpenAI and use the
+account's Codex allowance. Longer transcripts may require multiple requests.
+
+Configure the Ollama address and Codex CLI path under **Preferences →
+Meeting analysis**. Install and start Ollama separately, and download a model
+such as `ollama pull qwen3:8b` on that server. The address can point to a local
+or network server, for example `http://karaczan:11434` or an HTTPS endpoint.
+Analysis sends the transcript to the configured server. Models advertised by
+Ollama as hosted in its cloud remain excluded. Previously saved OpenAI analyses
+remain available. The former `openai-api-key` file is not used or deleted by the
+app; remove it manually if it is no longer needed.
+
+Choose **Ollama local** to use the Ollama server on this computer at
+`http://127.0.0.1:11434`, independently of the configured server. Each Ollama
+mode remembers its own model. Start the local Ollama service and pull a model
+before refreshing the model list.
+
+**OpenCode Go** uses OpenCode CLI 2.2.3 or newer and its connected OpenCode Go
+account. Connect it in OpenCode first, then refresh the models in the analysis
+window and choose an `opencode-go/...` model. The transcript is sent to that
+provider and OpenCode may retain session data according to its own settings.
+The app runs a private OpenCode server with a temporary project policy denying
+tool use; it passes the transcript through standard input.
+
+Long transcripts are processed in chunks without silently truncating input. If the
+partial notes fit in one request, the model combines them once; otherwise the app
+combines them directly and indicates that similar points may remain. The analysis
+window displays the current stage and elapsed time and allows
+canceling. Every completed analysis is stored as a separate Markdown file in the
+meeting's `analyses/` directory; the window lists and previews versions, offers
+copy/open actions, and marks a version stale when the transcript changes. Editing
+the Markdown in an external editor is supported. If its metadata header is removed,
+the app cannot determine whether it is stale.
+
+#### Speaker transcription (optional)
+
+**Transcribe with speakers** runs Whisper separately on the microphone and output
+channels, then identifies remote voices with the local pyannote Community-1 model.
+Microphone speech is labelled `Ja`, and remote voices are numbered in order of
+appearance. Use **Name speaker** to rename all occurrences in this meeting. Names
+are not carried across meetings; re-transcribing replaces the speaker names.
+Segments where the speaker cannot be determined are labelled `Osoba nieustalona`.
+Transcription and speaker assignment can be inaccurate, especially for overlapping
+voices or when remote voices are picked up by the microphone; headphones help.
+
+Set up the optional runtime in **Preferences → Meeting speakers — Hugging Face**:
+
+1. Accept the model conditions at https://huggingface.co/pyannote/speaker-diarization-community-1
+   and create a Hugging Face read token.
+2. Enter the token and optionally change the Python environment and model cache
+   directories. The default directories are
+   `~/.local/share/speak-to-computer/diarization/.venv` and `~/.cache/huggingface`.
+3. Click **Install / check integration**. The app creates the environment, installs
+   CPU PyTorch and pyannote.audio, downloads the model and checks it can load.
+   Python 3 with venv/pip, FFmpeg and the system libraries required by PyTorch
+   must be available. Packages can require several GB of disk space. The meeting
+   sidecar passes audio in memory and does not require TorchCodec audio decoding.
+4. Click **OK** to save the settings. The token is stored unencrypted in an
+   owner-only `huggingface-token` file next to `settings.ini`; clear the field and
+   save to remove it. Alternatively, leave it blank and provide `HF_TOKEN` in the
+   app's environment. No token is required in the GUI when using that variable.
+
+After the model is cached, processing can run offline. `STC_DIARIZATION_PYTHON`
+can override the configured environment's Python executable. This feature
+currently uses the CPU. Closing preferences without saving discards edited paths
+and token, but does not uninstall anything already downloaded by setup.
+
+The ordinary **Transcribe** button needs no pyannote installation and replaces any
+previous speaker transcript. `speakers.json` and `transcript.txt` are stored in the
+meeting folder; they contain meeting text and speaker names.
 
 ### Language mode
 
