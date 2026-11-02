@@ -444,6 +444,10 @@ void CoreBehaviorTest::meetingAnalysisShouldSaveVersionsAndDetectChanges()
     start->click();
     QTRY_COMPARE_WITH_TIMEOUT(versions->count(), 1, 5000);
     QVERIFY(preview->toPlainText().contains(QStringLiteral("Wniosek (00:00:01)")));
+    QVERIFY(versions->currentItem()->text().contains(QStringLiteral("Duration: ")));
+    QFile savedAnalysis(versions->currentItem()->data(Qt::UserRole).toString());
+    QVERIFY(savedAnalysis.open(QIODevice::ReadOnly));
+    QVERIFY(savedAnalysis.readAll().contains("\"duration_ms\""));
     QCOMPARE(info->text(), QStringLiteral("Based on the current transcript."));
     QCOMPARE(busySpy.size(), 2);
     QVERIFY(busySpy[0][0].toBool()); QVERIFY(!busySpy[1][0].toBool());

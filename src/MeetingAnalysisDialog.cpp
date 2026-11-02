@@ -37,6 +37,13 @@ QString elapsedText(qint64 seconds)
             .arg((seconds / 60) % 60, 2, 10, QLatin1Char('0')).arg(seconds % 60, 2, 10, QLatin1Char('0'));
 }
 
+QString durationText(qint64 milliseconds)
+{
+    if (milliseconds < 0) return QStringLiteral("unknown");
+    const qint64 seconds = milliseconds / 1000;
+    return QStringLiteral("%1.%2").arg(elapsedText(seconds)).arg(milliseconds % 1000, 3, 10, QLatin1Char('0'));
+}
+
 QJsonObject metadata(const QByteArray &data)
 {
     const QByteArray prefix("<!-- STC_ANALYSIS ");
@@ -361,6 +368,7 @@ void MeetingAnalysisDialog::finishAnalysis(int exitCode, QProcess::ExitStatus ex
 {
     readErrors(true);
     const QByteArray output = process_.readAllStandardOutput();
+    const qint64 durationMs = elapsed_.isValid() ? elapsed_.elapsed() : 0;
     if (destroying_) return;
     QString message;
     if (canceled_) message = QStringLiteral("Analysis canceled.");
@@ -383,7 +391,9 @@ void MeetingAnalysisDialog::finishAnalysis(int exitCode, QProcess::ExitStatus ex
                 const QString name = now.toString(QStringLiteral("yyyyMMdd-HHmmss-zzz")) + QLatin1Char('-') + QUuid::createUuid().toString(QUuid::WithoutBraces).left(8) + QStringLiteral(".md");
                 const QString path = QDir(meetingDir.filePath(QStringLiteral("analyses"))).filePath(name);
                 QJsonObject meta{{QStringLiteral("created"), now.toString(Qt::ISODateWithMs)}, {QStringLiteral("backend"), backend_},
-                        {QStringLiteral("model"), model_.isEmpty() ? QStringLiteral("Default (Codex)") : model_}, {QStringLiteral("transcript_sha256"), QString::fromLatin1(snapshotHash_)}};
+                        {QStringLiteral("model"), model_.isEmpty() ? QStringLiteral("Default (Codex)") : model_},
+                        {QStringLiteral("duration_ms"), static_cast<double>(durationMs)},
+                        {QStringLiteral("transcript_sha256"), QString::fromLatin1(snapshotHash_)}};
                 if (!reasoningEffort_.isEmpty()) meta.insert(QStringLiteral("reasoning_effort"), reasoningEffort_);
                 const QByteArray contents = QByteArray("<!-- STC_ANALYSIS ") + QJsonDocument(meta).toJson(QJsonDocument::Compact) + " -->\n" + markdown.toUtf8();
                 QSaveFile file(path);
@@ -409,6 +419,9 @@ void MeetingAnalysisDialog::reloadVersions(const QString &select)
         QString label = date.isValid() ? QStringLiteral("%1 — %2 / %3").arg(date.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")), meta.value(QStringLiteral("backend")).toString(), meta.value(QStringLiteral("model")).toString()) : info.fileName();
         const QString effort = meta.value(QStringLiteral("reasoning_effort")).toString();
         if (!effort.isEmpty()) label += QStringLiteral(" / %1").arg(effort);
+        const QJsonValue duration = meta.value(QStringLiteral("duration_ms"));
+        label += QStringLiteral(" / Duration: %1")
+                .arg(duration.isDouble() ? durationText(static_cast<qint64>(duration.toDouble())) : QStringLiteral("unknown"));
         auto *item = new QListWidgetItem(label, versions_); item->setData(Qt::UserRole, info.absoluteFilePath());
         if (info.absoluteFilePath() == old) versions_->setCurrentItem(item);
     }
