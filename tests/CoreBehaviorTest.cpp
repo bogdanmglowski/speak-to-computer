@@ -104,6 +104,7 @@ private slots:
     void whisperRunnerShouldPassTranslateFlagWhenEnabled();
     void whisperRunnerShouldOmitTranslateFlagWhenDisabled();
     void whisperRunnerShouldStreamMeetingProgress();
+    void overlayExpandedShouldSeparateHeaderFromControls();
     void wavWriterShouldWritePcm16MonoHeader();
     void recorderAutoShouldPickFirstAvailableBackend();
     void recorderPulseaudioShouldUseParecOrParecord();
@@ -344,6 +345,15 @@ void CoreBehaviorTest::overlayShouldKeepVoiceShapeStationary()
     overlay.setAudioLevel(0.2);
     overlay.setAudioLevel(0.8);
     QCOMPARE(overlay.grab().toImage(), firstPulse);
+}
+
+void CoreBehaviorTest::overlayExpandedShouldSeparateHeaderFromControls()
+{
+    OverlayWidget overlay;
+    overlay.showRecording(QStringLiteral("Recording"), {});
+
+    QCOMPARE(overlay.width(), 600);
+    QCOMPARE(overlay.height(), 202);
 }
 
 void CoreBehaviorTest::settingsShouldSaveAndReloadMiniOverlayToggle()

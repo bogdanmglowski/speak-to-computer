@@ -28,13 +28,14 @@
 
 namespace {
 
-constexpr int defaultWidth = 540;
+constexpr int defaultWidth = 600;
 constexpr int outerMargin = 8;
 constexpr int textLeft = 52;
 constexpr int rightMargin = 16;
-constexpr int titleTop = 14;
-constexpr int titleHeight = 22;
-constexpr int bodyTop = 46;
+constexpr int titleTop = 13;
+constexpr int titleHeight = 27;
+constexpr int controlsTop = 56;
+constexpr int bodyTop = 93;
 constexpr int bodyTextPointSize = 11;
 constexpr int bodyTextHeight = 18;
 constexpr int bodyLineGap = 4;
@@ -47,12 +48,10 @@ constexpr int miniWidthPx = 380;
 constexpr int miniHeightPx = 56;
 constexpr int miniPaddingPx = 12;
 constexpr int cardBottomMargin = 12;
-constexpr int modelChipTop = 11;
 constexpr int modelChipHeight = 26;
 constexpr int modelChipRightPadding = 12;
 constexpr int modelChipHorizontalPadding = 8;
 constexpr int modelChipArrowWidth = 9;
-constexpr int modelChipGapToTitle = 8;
 constexpr int chipGap = 4;
 constexpr int closeButtonWidth = 22;
 constexpr int closeButtonGap = 5;
@@ -410,7 +409,7 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
         accent = QColor(240, 170, 60);
     }
 
-    const QPointF indicatorCenter(card.left() + 28, card.top() + 28);
+    const QPointF indicatorCenter(card.left() + 28, card.top() + titleTop + titleHeight / 2.0);
     painter.setPen(Qt::NoPen);
     painter.setBrush(accent);
     painter.drawEllipse(indicatorCenter, 7, 7);
@@ -425,17 +424,25 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     const QRectF engineRect = engineChipRect(card);
     const QRectF chipRect = modelChipRect(card);
 
-    // Title sits between left chips (go / paste target) and right control chips.
+    // The title has a dedicated header row. Controls deliberately live below it so
+    // the state name stays readable instead of competing with the chips.
     QFont titleFont = font();
-    titleFont.setPointSize(13);
-    titleFont.setWeight(QFont::DemiBold);
+    titleFont.setPointSize(16);
+    titleFont.setWeight(QFont::Bold);
     painter.setFont(titleFont);
     painter.setPen(QColor(245, 247, 250));
-    const qreal titleLeft = pasteTargetRect.right() + modelChipGapToTitle;
-    const qreal titleWidth = std::max<qreal>(72.0, languageRect.left() - titleLeft - modelChipGapToTitle);
+    const QRectF closeRect = closeButtonRect(card);
+    const qreal titleLeft = card.left() + textLeft;
+    const qreal titleWidth = std::max<qreal>(120.0, closeRect.left() - titleLeft - 14.0);
     const QFontMetrics titleMetrics(titleFont);
     const QString elidedTitle = titleMetrics.elidedText(title_, Qt::ElideRight, static_cast<int>(titleWidth));
-    painter.drawText(QRectF(titleLeft, card.top() + titleTop, titleWidth, titleHeight), elidedTitle);
+    painter.drawText(QRectF(titleLeft, card.top() + titleTop, titleWidth, titleHeight),
+            Qt::AlignVCenter | Qt::AlignLeft,
+            elidedTitle);
+
+    painter.setPen(QPen(QColor(255, 255, 255, 24), 1));
+    painter.drawLine(QPointF(card.left() + textLeft, card.top() + controlsTop - 9),
+            QPointF(card.right() - rightMargin, card.top() + controlsTop - 9));
 
     auto drawChip = [&](const QRectF &rect, const QString &label, bool enabled) {
         painter.setPen(QPen(QColor(255, 255, 255, enabled ? 44 : 30), 1));
@@ -502,7 +509,6 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
     drawChip(engineRect, engineLabel_, engineControlEnabled_);
     drawChip(chipRect, modelLabel_, modelControlEnabled_);
 
-    const QRectF closeRect = closeButtonRect(card);
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(229, 70, 78));
     painter.drawRoundedRect(closeRect, 6, 6);
@@ -904,7 +910,7 @@ QRectF OverlayWidget::modelChipRect(const QRectF &card) const
             64,
             110);
     const qreal chipX = card.right() - modelChipRightPadding - closeButtonWidth - closeButtonGap - chipWidth;
-    const qreal chipY = card.top() + modelChipTop;
+    const qreal chipY = card.top() + controlsTop;
     return QRectF(chipX, chipY, chipWidth, modelChipHeight);
 }
 
@@ -921,7 +927,7 @@ QRectF OverlayWidget::engineChipRect(const QRectF &card) const
             100);
     const QRectF modelRect = modelChipRect(card);
     const qreal chipX = modelRect.left() - chipGap - chipWidth;
-    const qreal chipY = card.top() + modelChipTop;
+    const qreal chipY = card.top() + controlsTop;
     return QRectF(chipX, chipY, chipWidth, modelChipHeight);
 }
 
@@ -938,7 +944,7 @@ QRectF OverlayWidget::languageChipRect(const QRectF &card) const
             80);
     const QRectF engineRect = engineChipRect(card);
     const qreal chipX = engineRect.left() - chipGap - chipWidth;
-    const qreal chipY = card.top() + modelChipTop;
+    const qreal chipY = card.top() + controlsTop;
     return QRectF(chipX, chipY, chipWidth, modelChipHeight);
 }
 
@@ -957,7 +963,7 @@ QRectF OverlayWidget::sendKeywordChipRect(const QRectF &card) const
     // checkbox (12) + gaps + text + padding — left of title, after indicator
     const int chipWidth = std::clamp(textWidth + 8 + 12 + 6 + 10, 52, 90);
     const qreal chipX = card.left() + sendKeywordLeft;
-    const qreal chipY = card.top() + modelChipTop;
+    const qreal chipY = card.top() + controlsTop;
     return QRectF(chipX, chipY, chipWidth, modelChipHeight);
 }
 
@@ -974,14 +980,14 @@ QRectF OverlayWidget::pasteTargetChipRect(const QRectF &card) const
             88);
     const QRectF sendKeywordRect = sendKeywordChipRect(card);
     const qreal chipX = sendKeywordRect.right() + chipGap;
-    const qreal chipY = card.top() + modelChipTop;
+    const qreal chipY = card.top() + controlsTop;
     return QRectF(chipX, chipY, chipWidth, modelChipHeight);
 }
 
 QRectF OverlayWidget::closeButtonRect(const QRectF &card) const
 {
     const qreal x = card.right() - modelChipRightPadding - closeButtonWidth;
-    const qreal y = card.top() + modelChipTop + (modelChipHeight - closeButtonWidth) / 2.0;
+    const qreal y = card.top() + titleTop + (titleHeight - closeButtonWidth) / 2.0;
     return QRectF(x, y, closeButtonWidth, closeButtonWidth);
 }
 
