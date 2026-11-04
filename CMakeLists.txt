@@ -21,6 +21,7 @@ add_executable(speak-to-computer
     src/ClipboardPaster.h
     src/FileHandoff.cpp
     src/FileHandoff.h
+    src/GpuMonitor.h
     src/OverlayWidget.cpp
     src/OverlayWidget.h
     src/PreferencesDialog.cpp
@@ -122,6 +123,7 @@ if(BUILD_TESTING)
         src/AudioRecorder.h
         src/FileHandoff.cpp
         src/FileHandoff.h
+        src/GpuMonitor.h
         src/ClipboardPaster.cpp
         src/ClipboardPaster.h
         src/BuzzAsrRunner.cpp

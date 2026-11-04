@@ -2,6 +2,7 @@
 #include "AudioRecorder.h"
 #include "BuzzAsrRunner.h"
 #include "ClipboardPaster.h"
+#include "GpuMonitor.h"
 #include "MeetingDialog.h"
 #include "MeetingAnalysisDialog.h"
 #include "MeetingStore.h"
@@ -96,15 +97,17 @@ private slots:
     void overlayShouldResetVoiceAmplitudeForNewRecording();
     void overlayShouldReturnToFlatWaveformDuringSilence();
     void overlayShouldKeepVoiceShapeStationary();
+    void overlayExpandedShouldSeparateHeaderFromControls();
     void overlayMiniShouldHaveNoPanelBackground();
     void overlayMiniShouldKeepErrorsAndTranscriptionInFullView();
     void overlayMiniShouldNotActivateInvisibleControls();
+    void gpuMonitorShouldRefreshAndHandleUnavailableMetrics();
+    void overlayShouldShowGpuUpdatesDuringTranscription();
     void cleanupShouldTrimAndJoinTranscriptLines();
     void cleanupShouldDropWhisperNonSpeechAnnotations();
     void whisperRunnerShouldPassTranslateFlagWhenEnabled();
     void whisperRunnerShouldOmitTranslateFlagWhenDisabled();
     void whisperRunnerShouldStreamMeetingProgress();
-    void overlayExpandedShouldSeparateHeaderFromControls();
     void wavWriterShouldWritePcm16MonoHeader();
     void recorderAutoShouldPickFirstAvailableBackend();
     void recorderPulseaudioShouldUseParecOrParecord();
@@ -399,6 +402,37 @@ void CoreBehaviorTest::overlayMiniShouldHaveNoPanelBackground()
     const QImage image = overlay.grab().toImage();
     QCOMPARE(overlay.size(), QSize(380, 56));
     QCOMPARE(image.pixelColor(24, 12).alpha(), 0);
+}
+
+void CoreBehaviorTest::gpuMonitorShouldRefreshAndHandleUnavailableMetrics()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString executable = createExecutable(&dir, QStringLiteral("nvidia-smi"),
+            "#!/bin/sh\necho '42, 201, 8188'\n");
+    QVERIFY(!executable.isEmpty());
+    QString label;
+    GpuMonitor monitor([&label](const QString &value) { label = value; }, executable, 100);
+    monitor.start();
+    QTRY_COMPARE(label, QStringLiteral("GPU 42% · 201/8188 MB"));
+    QVERIFY(!createExecutable(&dir, QStringLiteral("nvidia-smi"),
+            "#!/bin/sh\necho 'N/A, 2100, 8188'\n").isEmpty());
+    QTRY_COMPARE(label, QStringLiteral("GPU — · 2100/8188 MB"));
+    QVERIFY(!createExecutable(&dir, QStringLiteral("nvidia-smi"),
+            "#!/bin/sh\nexit 1\n").isEmpty());
+    QTRY_VERIFY(label.isEmpty());
+    monitor.stop();
+}
+
+void CoreBehaviorTest::overlayShouldShowGpuUpdatesDuringTranscription()
+{
+    OverlayWidget overlay;
+    overlay.showTranscribing(QStringLiteral("Original"));
+    overlay.setGpuMemoryLabel(QString());
+    const QImage before = overlay.grab().toImage();
+    overlay.setGpuMemoryLabel(QStringLiteral("GPU 42% · 2100/8188 MB"));
+    const QImage after = overlay.grab().toImage();
+    QVERIFY(before != after);
 }
 
 void CoreBehaviorTest::overlayMiniShouldKeepErrorsAndTranscriptionInFullView()

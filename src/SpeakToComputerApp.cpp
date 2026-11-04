@@ -179,9 +179,6 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     connect(&overlay_, &OverlayWidget::visibilityChanged, this, &SpeakToComputerApp::setOverlayCloseHotkeyEnabled);
     connect(&elapsedTimer_, &QTimer::timeout, this, [this]() {
         overlay_.setElapsedMs(recordingClock_.elapsed());
-        if (state_ == State::Recording) {
-            overlay_.setGpuMemoryLabel(gpuMemoryLabel());
-        }
     });
     elapsedTimer_.setInterval(200);
 
@@ -423,6 +420,8 @@ void SpeakToComputerApp::startRecording(OutputMode outputMode, quint64 targetWin
     configureVadForCurrentRecording();
 
     state_ = State::Recording;
+    overlay_.setGpuMemoryLabel(QString());
+    gpuMonitor_.start();
     if (!mouseFinishHotkey_.registerMouseButton(9, &errorMessage)) {
         qWarning().noquote() << errorMessage;
     }
@@ -462,6 +461,8 @@ void SpeakToComputerApp::startRealtimeSession(OutputMode outputMode, quint64 tar
     }
 
     state_ = State::Recording;
+    overlay_.setGpuMemoryLabel(QString());
+    gpuMonitor_.start();
     recordingClock_.restart();
     elapsedTimer_.start();
     setOverlayRuntimeControlsEnabled(true);
@@ -480,6 +481,7 @@ void SpeakToComputerApp::stopRealtimeSession()
     recordingStopRequested_ = true;
     elapsedTimer_.stop();
     realtime_.stopSession();
+    gpuMonitor_.stop();
     playEndSound();
     state_ = State::Idle;
     trayStatusOverride_.clear();
@@ -561,6 +563,7 @@ void SpeakToComputerApp::cancelRecording()
     vadEnabledForCurrentRecording_ = false;
     vadEndpointDetector_.clear();
     elapsedTimer_.stop();
+    gpuMonitor_.stop();
 
     if (settings_.isRealtimeEngine()) {
         realtime_.stopSession();
@@ -620,6 +623,7 @@ void SpeakToComputerApp::handleRealtimeServerFailed(const QString &message)
 void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
 {
     if (state_ != State::Transcribing) return;
+    gpuMonitor_.stop();
     removeCurrentWav();
 
     if (text.isEmpty()) {
@@ -696,6 +700,7 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
 void SpeakToComputerApp::handleTranscriptionFailed(const QString &message)
 {
     if (state_ != State::Transcribing) return;
+    gpuMonitor_.stop();
     const QString fallbackPath = fallbackModelPathForInitializationFailure();
     const bool shouldOfferFallback =
             message.contains(QStringLiteral("failed to initialize whisper context"), Qt::CaseInsensitive)
@@ -719,6 +724,7 @@ void SpeakToComputerApp::handleRecordingFailed(const QString &message)
 {
     if (state_ == State::Recording) {
         elapsedTimer_.stop();
+        gpuMonitor_.stop();
         showErrorAndReturnIdle(message);
     }
 }
@@ -853,6 +859,7 @@ bool SpeakToComputerApp::applyEngineSelection(const QString &engineId, QString *
         vadEnabledForCurrentRecording_ = false;
         vadEndpointDetector_.clear();
         elapsedTimer_.stop();
+        gpuMonitor_.stop();
 
         if (settings_.isRealtimeEngine()) {
             realtime_.stopSession();
@@ -946,6 +953,7 @@ bool SpeakToComputerApp::applyLanguageSelection(const QString &languageCode, QSt
         vadEnabledForCurrentRecording_ = false;
         vadEndpointDetector_.clear();
         elapsedTimer_.stop();
+        gpuMonitor_.stop();
 
         if (settings_.isRealtimeEngine()) {
             realtime_.stopSession();
@@ -1542,38 +1550,11 @@ bool SpeakToComputerApp::maybeOfferModelFallback(const QString &message)
     return true;
 }
 
-QString SpeakToComputerApp::gpuMemoryLabel() const
-{
-    QProcess nvidiaSmi;
-    nvidiaSmi.start(QStringLiteral("nvidia-smi"),
-            {QStringLiteral("--query-gpu=memory.used,memory.total"),
-                    QStringLiteral("--format=csv,noheader,nounits")});
-    if (!nvidiaSmi.waitForFinished(500) || nvidiaSmi.exitCode() != 0) {
-        return QString();
-    }
-    const QStringList fields = QString::fromUtf8(nvidiaSmi.readAllStandardOutput())
-                                       .trimmed()
-                                       .split(QLatin1Char(','));
-    if (fields.size() < 2) {
-        return QString();
-    }
-    bool usedOk = false;
-    bool totalOk = false;
-    const int usedMb = fields.at(0).trimmed().toInt(&usedOk);
-    const int totalMb = fields.at(1).trimmed().toInt(&totalOk);
-    if (!usedOk || !totalOk || totalMb <= 0) {
-        return QString();
-    }
-    return QStringLiteral("GPU %1/%2 MB").arg(usedMb).arg(totalMb);
-}
-
 QString SpeakToComputerApp::outputLabel(OutputMode outputMode) const
 {
-    const QString gpu = gpuMemoryLabel();
-    const QString base = outputMode == OutputMode::English
+    return outputMode == OutputMode::English
             ? QStringLiteral("English")
             : QStringLiteral("Original (%1)").arg(originalLanguageLabel());
-    return gpu.isEmpty() ? base : QStringLiteral("%1 · %2").arg(base, gpu);
 }
 
 QString SpeakToComputerApp::originalLanguageLabel() const
@@ -1771,6 +1752,7 @@ void SpeakToComputerApp::updateTrayStatus()
 
 void SpeakToComputerApp::showAlertAndReturnIdle(const QString &message)
 {
+    gpuMonitor_.stop();
     state_ = State::Idle;
     recordingStopRequested_ = false;
     vadEnabledForCurrentRecording_ = false;
@@ -1785,6 +1767,7 @@ void SpeakToComputerApp::showAlertAndReturnIdle(const QString &message)
 
 void SpeakToComputerApp::showErrorAndReturnIdle(const QString &message)
 {
+    gpuMonitor_.stop();
     if (realtime_.isSessionActive()) {
         realtime_.stopSession();
     }

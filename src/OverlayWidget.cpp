@@ -571,6 +571,9 @@ void OverlayWidget::paintEvent(QPaintEvent *event)
 
     for (const QString &secondarySubtitle : secondarySubtitles_) {
         QString secondaryBody = secondarySubtitle;
+        if (mode_ == Mode::Transcribing && !gpuMemoryLabel_.isEmpty()) {
+            secondaryBody = gpuMemoryLabel_;
+        }
         secondaryBody = metrics.elidedText(secondaryBody, Qt::ElideRight, static_cast<int>(bodyWidth));
         painter.setPen(QColor(150, 158, 170));
         painter.drawText(QRectF(card.left() + textLeft,

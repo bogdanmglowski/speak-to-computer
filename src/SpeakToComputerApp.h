@@ -5,6 +5,7 @@
 #include "BuzzAsrRunner.h"
 #include "ClipboardPaster.h"
 #include "FileHandoff.h"
+#include "GpuMonitor.h"
 #include "OverlayWidget.h"
 #include "ParakeetRunner.h"
 #include "RealtimeSidecar.h"
@@ -88,7 +89,6 @@ private:
     bool registerPushToTalkButton(int button, QString *errorMessage);
     bool maybeOfferModelFallback(const QString &message);
     QString outputLabel(OutputMode outputMode) const;
-    QString gpuMemoryLabel() const;
     QString originalLanguageLabel() const;
     QString hotkeyFor(OutputMode outputMode) const;
     QStringList recordingHints() const;
@@ -127,6 +127,7 @@ private:
     X11Hotkey translateHotkey_;
     X11Hotkey overlayCloseHotkey_;
     OverlayWidget overlay_;
+    GpuMonitor gpuMonitor_{[this](const QString &label) { overlay_.setGpuMemoryLabel(label); }};
     AudioRecorder recorder_;
     WhisperRunner whisper_;
     std::unique_ptr<MeetingDialog> meetingDialog_;
