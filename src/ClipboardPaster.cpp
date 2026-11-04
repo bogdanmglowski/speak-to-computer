@@ -3,9 +3,11 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QDebug>
+#include <QEventLoop>
 #include <QMimeData>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QThread>
 #include <QUrl>
 
@@ -27,7 +29,11 @@ bool ClipboardPaster::copy(const QString &text, QString *errorMessage)
     return writeX11Clipboard(text, errorMessage);
 }
 
-bool ClipboardPaster::paste(quint64 targetWindow, const QString &text, QString *errorMessage, bool sendEnter)
+bool ClipboardPaster::paste(quint64 targetWindow,
+        const QString &text,
+        QString *errorMessage,
+        bool sendEnter,
+        PasteBehavior behavior)
 {
     const QString xdotool = QStandardPaths::findExecutable(QStringLiteral("xdotool"));
     if (xdotool.isEmpty()) {
@@ -37,14 +43,26 @@ bool ClipboardPaster::paste(quint64 targetWindow, const QString &text, QString *
         return false;
     }
 
-    // Terminals read the X11 clipboard. Qt's clipboard often never becomes that selection,
-    // so the paste shortcut inserts nothing. xclip owns the selection the target actually reads.
-    if (!writeX11Clipboard(text, errorMessage)) {
-        return false;
+    QClipboard *clipboard = nullptr;
+    QMimeData *previousClipboard = nullptr;
+    const bool classic = behavior == PasteBehavior::Classic;
+    if (classic) {
+        clipboard = QApplication::clipboard();
+        previousClipboard = cloneClipboardMimeData();
+        clipboard->setText(text, QClipboard::Clipboard);
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 50);
+    } else {
+        // Terminals read the X11 clipboard. Qt's clipboard often never becomes that selection,
+        // so the paste shortcut inserts nothing. xclip owns the selection the target actually reads.
+        if (!writeX11Clipboard(text, errorMessage)) {
+            return false;
+        }
     }
 
-    const quint64 keystrokeWindow = targetWindow != 0 ? targetWindow : activeWindowId();
-    const QString keystroke = pasteKeystrokeFor(keystrokeWindow);
+    const quint64 keystrokeWindow = classic
+            ? targetWindow
+            : (targetWindow != 0 ? targetWindow : activeWindowId());
+    const QString keystroke = classic ? QStringLiteral("ctrl+v") : pasteKeystrokeFor(keystrokeWindow);
     qInfo().noquote() << "paste window" << keystrokeWindow << "key" << keystroke;
     QStringList args;
     if (targetWindow != 0) {
@@ -59,19 +77,54 @@ bool ClipboardPaster::paste(quint64 targetWindow, const QString &text, QString *
     QProcess pasteProcess;
     pasteProcess.start(xdotool, args);
     if (!pasteProcess.waitForStarted(1000)) {
+        if (classic) {
+            clipboard->setMimeData(previousClipboard);
+            previousClipboard = nullptr;
+        }
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Could not start xdotool: %1").arg(pasteProcess.errorString());
         }
         return false;
     }
 
-    if (!pasteProcess.waitForFinished(2500) || pasteProcess.exitStatus() != QProcess::NormalExit
+    bool finished = false;
+    if (classic) {
+        // X11 requests the Qt-owned clipboard asynchronously. Keep processing
+        // events while xdotool waits before Enter, otherwise the target can
+        // receive Enter before Qt has supplied the pasted text.
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+        connect(&pasteProcess, &QProcess::finished, &loop, &QEventLoop::quit);
+        if (pasteProcess.state() != QProcess::NotRunning) {
+            timeout.start(2500);
+            loop.exec(QEventLoop::ExcludeUserInputEvents);
+        }
+        finished = pasteProcess.state() == QProcess::NotRunning;
+        if (!finished) {
+            pasteProcess.kill();
+            pasteProcess.waitForFinished(1000);
+        }
+    } else {
+        finished = pasteProcess.waitForFinished(2500);
+    }
+    if (!finished || pasteProcess.exitStatus() != QProcess::NormalExit
             || pasteProcess.exitCode() != 0) {
         const QString stderrText = QString::fromUtf8(pasteProcess.readAllStandardError()).trimmed();
+        if (classic) {
+            clipboard->setMimeData(previousClipboard);
+            previousClipboard = nullptr;
+        }
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("xdotool paste failed: %1").arg(stderrText);
         }
         return false;
+    }
+    if (classic) {
+        QTimer::singleShot(800, QApplication::instance(), [clipboard, previousClipboard]() {
+            clipboard->setMimeData(previousClipboard);
+        });
     }
     return true;
 }
@@ -168,6 +221,9 @@ QMimeData *ClipboardPaster::cloneClipboardMimeData()
 {
     const QMimeData *source = QApplication::clipboard()->mimeData(QClipboard::Clipboard);
     auto *copy = new QMimeData();
+    if (source == nullptr) {
+        return copy;
+    }
     for (const QString &format : source->formats()) {
         copy->setData(format, source->data(format));
     }

@@ -171,5 +171,7 @@ if(BUILD_TESTING)
         target_include_directories(speak-to-computer-x11-tests PRIVATE src ${X11_INCLUDE_DIR})
         target_link_libraries(speak-to-computer-x11-tests PRIVATE Qt6::Core Qt6::Test ${X11_LIBRARIES})
         add_test(NAME x11-hotkey COMMAND ${XVFB_RUN} -a $<TARGET_FILE:speak-to-computer-x11-tests>)
+        add_test(NAME x11-clipboard COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=xcb
+            ${XVFB_RUN} -a $<TARGET_FILE:speak-to-computer-tests> clipboardClassicPasteShouldServeSelectionBeforeEnter)
     endif()
 endif()

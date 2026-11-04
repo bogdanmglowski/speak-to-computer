@@ -7,9 +7,18 @@ class ClipboardPaster : public QObject {
     Q_OBJECT
 
 public:
+    enum class PasteBehavior {
+        Classic,
+        TerminalCompatible,
+    };
+
     explicit ClipboardPaster(QObject *parent = nullptr);
 
-    bool paste(quint64 targetWindow, const QString &text, QString *errorMessage, bool sendEnter = false);
+    bool paste(quint64 targetWindow,
+            const QString &text,
+            QString *errorMessage,
+            bool sendEnter = false,
+            PasteBehavior behavior = PasteBehavior::Classic);
     bool copy(const QString &text, QString *errorMessage);
 
     // Terminal emulators and Herdr GPUI paste with ctrl+shift+v.

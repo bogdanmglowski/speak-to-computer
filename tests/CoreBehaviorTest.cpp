@@ -56,6 +56,8 @@ private slots:
     void buzzAsrShouldPreserveUnicodePathsWithoutUnsupportedPrompts();
     void buzzAsrShouldReportStartupErrorBeforeProcessExit();
     void clipboardCopyShouldNotSendKeystrokes();
+    void clipboardClassicPasteShouldUseCtrlVWithoutXclip();
+    void clipboardClassicPasteShouldServeSelectionBeforeEnter();
     void herdrGpuiShouldPasteWithCtrlShiftV();
     void focusPasteShouldReadActiveWindowClass();
     void emptyResultAlertShouldHideItself();
@@ -586,6 +588,57 @@ void CoreBehaviorTest::clipboardCopyShouldNotSendKeystrokes()
     QVERIFY(copied.open(QIODevice::ReadOnly));
     QCOMPARE(QString::fromUtf8(copied.readAll()), QStringLiteral("Zażółć gęślą jaźń"));
     QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("keystrokes"))));
+}
+
+void CoreBehaviorTest::clipboardClassicPasteShouldUseCtrlVWithoutXclip()
+{
+    QTemporaryDir dir;
+    const QByteArray previousPath = qgetenv("PATH");
+    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$*\" > \"$(dirname \"$0\")/xdotool-args\"\n")
+                    .isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + previousPath);
+
+    ClipboardPaster paster;
+    QString errorMessage;
+    QVERIFY2(paster.paste(0, QStringLiteral("old behavior"), &errorMessage, false,
+                          ClipboardPaster::PasteBehavior::Classic),
+            qPrintable(errorMessage));
+
+    QFile args(dir.filePath(QStringLiteral("xdotool-args")));
+    QVERIFY(args.open(QIODevice::ReadOnly));
+    const QString command = QString::fromUtf8(args.readAll());
+    QVERIFY(command.contains(QStringLiteral("ctrl+v")));
+}
+
+void CoreBehaviorTest::clipboardClassicPasteShouldServeSelectionBeforeEnter()
+{
+    if (QGuiApplication::platformName() != QStringLiteral("xcb")) {
+        QSKIP("Requires X11 clipboard");
+    }
+    if (QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty()) {
+        QSKIP("Requires xclip");
+    }
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QByteArray previousPath = qgetenv("PATH");
+    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
+            "#!/bin/sh\n"
+            "xclip -selection clipboard -o > \"$(dirname \"$0\")/received\" 2>/dev/null &\n"
+            "sleep 0.15\n"
+            "test -s \"$(dirname \"$0\")/received\"\n").isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + previousPath);
+
+    ClipboardPaster paster;
+    QString errorMessage;
+    QVERIFY2(paster.paste(0, QStringLiteral("Przykładowy tekst"), &errorMessage, true,
+                          ClipboardPaster::PasteBehavior::Classic), qPrintable(errorMessage));
+    QFile received(dir.filePath(QStringLiteral("received")));
+    QVERIFY(received.open(QIODevice::ReadOnly));
+    QCOMPARE(QString::fromUtf8(received.readAll()), QStringLiteral("Przykładowy tekst"));
 }
 
 void CoreBehaviorTest::herdrGpuiShouldPasteWithCtrlShiftV()
