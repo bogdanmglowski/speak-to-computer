@@ -29,6 +29,7 @@
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QUrl>
 #include <QScrollArea>
 #include <QSettings>
@@ -185,6 +186,23 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
                 AppSettings::normalizePasteTarget(settings.pasteTarget));
         pasteTargetCombo_->setCurrentIndex(pasteIndex >= 0 ? pasteIndex : 0);
     }
+    auto *pasteBehaviorWidget = new QWidget(transcriptionSection);
+    auto *pasteBehaviorLayout = new QVBoxLayout(pasteBehaviorWidget);
+    pasteBehaviorLayout->setContentsMargins(0, 0, 0, 0);
+    classicPasteRadio_ = new QRadioButton(QStringLiteral("Klasyczne wklejanie"), pasteBehaviorWidget);
+    terminalCompatiblePasteRadio_ = new QRadioButton(
+            QStringLiteral("Wklejanie kompatybilne z terminalami"), pasteBehaviorWidget);
+    classicPasteRadio_->setToolTip(QStringLiteral("Dotychczasowe zachowanie: clipboard Qt i Ctrl+V."));
+    terminalCompatiblePasteRadio_->setToolTip(
+            QStringLiteral("Używa xclip i dobiera Ctrl+V lub Ctrl+Shift+V do aktywnej aplikacji."));
+    pasteBehaviorLayout->addWidget(classicPasteRadio_);
+    pasteBehaviorLayout->addWidget(terminalCompatiblePasteRadio_);
+    if (AppSettings::normalizePasteBehavior(settings.pasteBehavior)
+            == QString::fromUtf8(AppSettings::kPasteBehaviorTerminalCompatible)) {
+        terminalCompatiblePasteRadio_->setChecked(true);
+    } else {
+        classicPasteRadio_->setChecked(true);
+    }
     threadsSpin_ = new QSpinBox(transcriptionSection);
     miniOverlayCheck_ = new QCheckBox(QStringLiteral("Tryb mini"), transcriptionSection);
     miniOverlayCheck_->setChecked(settings.miniOverlayEnabled);
@@ -195,6 +213,7 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     transcriptionLayout->addRow(QStringLiteral("Audio backend"), audioBackendCombo_);
     transcriptionLayout->addRow(QStringLiteral("Language"), languageEdit_);
     transcriptionLayout->addRow(QStringLiteral("Paste target"), pasteTargetCombo_);
+    transcriptionLayout->addRow(QStringLiteral("Sposób wklejania"), pasteBehaviorWidget);
     transcriptionLayout->addRow(QStringLiteral("Overlay"), miniOverlayCheck_);
     transcriptionLayout->addRow(QStringLiteral("Whisper CLI"), whisperCliEdit_);
     transcriptionLayout->addRow(QStringLiteral("Model path (ggml)"), modelEdit_);
@@ -600,6 +619,9 @@ AppSettings PreferencesDialog::editedSettings() const
     edited.parakeetScript = parakeetScriptEdit_->text().trimmed();
     edited.dictionaryPath = dictionaryPathEdit_->text().trimmed();
     edited.pasteTarget = pasteTargetCombo_->currentData().toString();
+    edited.pasteBehavior = terminalCompatiblePasteRadio_->isChecked()
+            ? QString::fromUtf8(AppSettings::kPasteBehaviorTerminalCompatible)
+            : QString::fromUtf8(AppSettings::kPasteBehaviorClassic);
     edited.miniOverlayEnabled = miniOverlayCheck_->isChecked();
     edited.activationSound = activationSoundEdit_->text().trimmed();
     edited.endSound = endSoundEdit_->text().trimmed();

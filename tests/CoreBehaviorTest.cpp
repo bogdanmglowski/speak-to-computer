@@ -36,6 +36,7 @@
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QIcon>
+#include <QRadioButton>
 #include <QTemporaryDir>
 #include <QtTest>
 #include <QtEndian>
@@ -79,6 +80,7 @@ private slots:
     void transcriptShouldStripTrailingSendKeyword();
     void settingsShouldSaveAndReloadMiniOverlayToggle();
     void preferencesShouldReturnMiniOverlayToggle();
+    void preferencesShouldExposePasteBehaviorRadioButtons();
     void settingsShouldLoadSeparateHotkeyDefaults();
     void settingsShouldMigrateLegacyHotkeyToDictationHotkey();
     void settingsShouldIgnoreTranslateToEnglishAsSavedMode();
@@ -391,6 +393,34 @@ void CoreBehaviorTest::preferencesShouldReturnMiniOverlayToggle()
     QVERIFY(dialog.editedSettings().miniOverlayEnabled);
     miniCheck->setChecked(false);
     QVERIFY(!dialog.editedSettings().miniOverlayEnabled);
+}
+
+void CoreBehaviorTest::preferencesShouldExposePasteBehaviorRadioButtons()
+{
+    AppSettings settings;
+    settings.pasteBehavior = QString::fromUtf8(AppSettings::kPasteBehaviorTerminalCompatible);
+    PreferencesDialog dialog(settings);
+
+    QRadioButton *classic = nullptr;
+    QRadioButton *terminal = nullptr;
+    for (QRadioButton *radio : dialog.findChildren<QRadioButton *>()) {
+        if (radio->text() == QStringLiteral("Klasyczne wklejanie")) {
+            classic = radio;
+        } else if (radio->text() == QStringLiteral("Wklejanie kompatybilne z terminalami")) {
+            terminal = radio;
+        }
+    }
+
+    QVERIFY(classic != nullptr);
+    QVERIFY(terminal != nullptr);
+    QVERIFY(!classic->isChecked());
+    QVERIFY(terminal->isChecked());
+    QCOMPARE(dialog.editedSettings().pasteBehavior,
+            QString::fromUtf8(AppSettings::kPasteBehaviorTerminalCompatible));
+
+    classic->setChecked(true);
+    QCOMPARE(dialog.editedSettings().pasteBehavior,
+            QString::fromUtf8(AppSettings::kPasteBehaviorClassic));
 }
 
 void CoreBehaviorTest::overlayMiniShouldHaveNoPanelBackground()

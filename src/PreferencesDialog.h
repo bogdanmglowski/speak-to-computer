@@ -11,6 +11,7 @@ class QDoubleSpinBox;
 class QGroupBox;
 class QLineEdit;
 class QListWidget;
+class QRadioButton;
 class QSpinBox;
 class QLabel;
 class QPushButton;
@@ -55,6 +56,8 @@ private:
     QLineEdit *parakeetScriptEdit_ = nullptr;
     QLineEdit *dictionaryPathEdit_ = nullptr;
     QComboBox *pasteTargetCombo_ = nullptr;
+    QRadioButton *classicPasteRadio_ = nullptr;
+    QRadioButton *terminalCompatiblePasteRadio_ = nullptr;
     QCheckBox *miniOverlayCheck_ = nullptr;
     QSpinBox *threadsSpin_ = nullptr;
     QLineEdit *activationSoundEdit_ = nullptr;
