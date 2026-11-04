@@ -1,16 +1,32 @@
 #include "PreferencesDialog.h"
 
 #include <QComboBox>
+#include <QCloseEvent>
+#include <QCoreApplication>
+#include <QDir>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFrame>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QPushButton>
+#include <QProcessEnvironment>
+#include <QHBoxLayout>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSpinBox>
+#include <QStandardPaths>
+#include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -34,6 +50,15 @@ void setComboValue(QComboBox *combo, const QString &value)
 
     combo->addItem(value);
     combo->setCurrentIndex(combo->count() - 1);
+}
+
+bool validOllamaUrl(const QString &value)
+{
+    const QUrl url(value.trimmed(), QUrl::StrictMode);
+    return url.isValid() && (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https"))
+            && !url.host().isEmpty() && !url.authority(QUrl::FullyEncoded).contains(QLatin1Char('@'))
+            && (url.path().isEmpty() || url.path() == QStringLiteral("/"))
+            && !url.hasQuery() && !url.hasFragment();
 }
 
 } // namespace
@@ -171,13 +196,276 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     outputGroup_->setLayout(outputLayout);
     sectionsLayout->addWidget(outputGroup_, 3, 0, 1, 2);
 
+    auto *meetingsSection = new QGroupBox(QStringLiteral("Meeting Recordings"), content);
+    auto *meetingsLayout = createFormLayout(meetingsSection);
+    auto *directoryRow = new QWidget(meetingsSection);
+    auto *directoryLayout = new QHBoxLayout(directoryRow);
+    directoryLayout->setContentsMargins(0, 0, 0, 0);
+    meetingsDirectoryEdit_ = new QLineEdit(settings.meetingsDirectory, directoryRow);
+    auto *browse = new QPushButton(QStringLiteral("Browse…"), directoryRow);
+    directoryLayout->addWidget(meetingsDirectoryEdit_);
+    directoryLayout->addWidget(browse);
+    connect(browse, &QPushButton::clicked, this, [this]() {
+        const QString directory = QFileDialog::getExistingDirectory(this, QStringLiteral("Meeting recordings directory"),
+                AppSettings::expandUserPath(meetingsDirectoryEdit_->text()));
+        if (!directory.isEmpty()) meetingsDirectoryEdit_->setText(directory);
+    });
+    meetingsLayout->addRow(QStringLiteral("Recordings directory"), directoryRow);
+    sectionsLayout->addWidget(meetingsSection, 4, 0, 1, 2);
+
+    auto *speakerSection = new QGroupBox(QStringLiteral("Meeting speakers — Hugging Face"), content);
+    auto *speakerLayout = createFormLayout(speakerSection);
+    auto *description = new QLabel(QStringLiteral("Install local speaker identification for meeting recordings. Accept the <a href=\"https://huggingface.co/pyannote/speaker-diarization-community-1\">model conditions</a> and create a <a href=\"https://huggingface.co/settings/tokens\">read token</a> first. Setup downloads Python packages and the model; it can use several GB."), speakerSection);
+    description->setWordWrap(true);
+    description->setOpenExternalLinks(true);
+    speakerLayout->addRow(description);
+    huggingFaceTokenEdit_ = new QLineEdit(settings.huggingFaceToken, speakerSection);
+    huggingFaceTokenEdit_->setObjectName(QStringLiteral("huggingFaceToken"));
+    huggingFaceTokenEdit_->setEchoMode(QLineEdit::Password);
+    huggingFaceTokenEdit_->setPlaceholderText(QStringLiteral("Read token (or use HF_TOKEN environment variable)"));
+    huggingFaceHomeEdit_ = new QLineEdit(settings.huggingFaceHome, speakerSection);
+    huggingFaceHomeEdit_->setObjectName(QStringLiteral("huggingFaceHome"));
+    diarizationRuntimeEdit_ = new QLineEdit(settings.diarizationRuntimeDirectory, speakerSection);
+    diarizationRuntimeEdit_->setObjectName(QStringLiteral("diarizationRuntimeDirectory"));
+    speakerLayout->addRow(QStringLiteral("Hugging Face token"), huggingFaceTokenEdit_);
+    speakerLayout->addRow(QStringLiteral("Model cache directory"), huggingFaceHomeEdit_);
+    speakerLayout->addRow(QStringLiteral("Python environment"), diarizationRuntimeEdit_);
+    auto *tokenNote = new QLabel(QStringLiteral("The token is saved unencrypted in a separate owner-only file when you press OK. Setup uses the values shown here."), speakerSection);
+    tokenNote->setWordWrap(true);
+    speakerLayout->addRow(tokenNote);
+    auto *setupButtons = new QHBoxLayout;
+    diarizationSetup_ = new QPushButton(QStringLiteral("Install / check integration"), speakerSection);
+    diarizationSetup_->setObjectName(QStringLiteral("diarizationSetup"));
+    diarizationStop_ = new QPushButton(QStringLiteral("Stop setup"), speakerSection);
+    diarizationStop_->setObjectName(QStringLiteral("diarizationStop"));
+    diarizationStop_->setEnabled(false);
+    setupButtons->addWidget(diarizationSetup_); setupButtons->addWidget(diarizationStop_);
+    speakerLayout->addRow(setupButtons);
+    diarizationStatus_ = new QLabel(QStringLiteral("Not checked."), speakerSection);
+    diarizationStatus_->setObjectName(QStringLiteral("diarizationSetupStatus"));
+    diarizationStatus_->setWordWrap(true);
+    speakerLayout->addRow(diarizationStatus_);
+    sectionsLayout->addWidget(speakerSection, 5, 0, 1, 2);
+
+    auto *analysisSection = new QGroupBox(QStringLiteral("Meeting analysis"), content);
+    auto *analysisLayout = createFormLayout(analysisSection);
+    auto *analysisInfo = new QLabel(QStringLiteral("Analysis sends the transcript to one of the configured Ollama servers, or uses Codex CLI/OpenCode CLI installed on this computer."), analysisSection);
+    analysisInfo->setWordWrap(true); analysisLayout->addRow(analysisInfo);
+    analysisOllamaServers_ = new QListWidget(analysisSection);
+    analysisOllamaServers_->setObjectName(QStringLiteral("analysisOllamaServers"));
+    analysisOllamaServers_->setSelectionMode(QAbstractItemView::SingleSelection);
+    analysisOllamaServers_->setMinimumHeight(76);
+    for (const QString &url : settings.analysisOllamaUrls) {
+        if (!url.trimmed().isEmpty()) analysisOllamaServers_->addItem(url.trimmed());
+    }
+    if (analysisOllamaServers_->count() == 0) analysisOllamaServers_->addItem(QStringLiteral("http://127.0.0.1:11434"));
+    analysisOllamaServers_->setCurrentRow(0);
+    analysisLayout->addRow(QStringLiteral("Ollama servers"), analysisOllamaServers_);
+
+    auto *analysisAddressRow = new QWidget(analysisSection);
+    auto *analysisAddressLayout = new QHBoxLayout(analysisAddressRow);
+    analysisAddressLayout->setContentsMargins(0, 0, 0, 0);
+    analysisOllamaUrlEdit_ = new QLineEdit(analysisOllamaServers_->currentItem()->text(), analysisAddressRow);
+    analysisOllamaUrlEdit_->setObjectName(QStringLiteral("analysisOllamaUrl"));
+    analysisOllamaUrlEdit_->setPlaceholderText(QStringLiteral("http://host:11434"));
+    auto *addOllama = new QPushButton(QStringLiteral("Add"), analysisAddressRow);
+    addOllama->setObjectName(QStringLiteral("analysisAddOllama"));
+    auto *removeOllama = new QPushButton(QStringLiteral("Remove"), analysisAddressRow);
+    removeOllama->setObjectName(QStringLiteral("analysisRemoveOllama"));
+    analysisAddressLayout->addWidget(analysisOllamaUrlEdit_, 1);
+    analysisAddressLayout->addWidget(addOllama);
+    analysisAddressLayout->addWidget(removeOllama);
+    analysisLayout->addRow(QStringLiteral("Address"), analysisAddressRow);
+    auto *checkOllama = new QPushButton(QStringLiteral("Check Ollama connection"), analysisSection);
+    checkOllama->setObjectName(QStringLiteral("analysisCheckOllama"));
+    analysisCheckStatus_ = new QLabel(QStringLiteral("Not checked."), analysisSection);
+    analysisCheckStatus_->setObjectName(QStringLiteral("analysisOllamaStatus"));
+    analysisCheckStatus_->setWordWrap(true);
+    analysisLayout->addRow(checkOllama, analysisCheckStatus_);
+    sectionsLayout->addWidget(analysisSection, 6, 0, 1, 2);
+    auto updateOllamaButtons = [this, removeOllama]() {
+        removeOllama->setEnabled(analysisOllamaServers_->count() > 1 && analysisOllamaServers_->currentRow() >= 0);
+    };
+    connect(analysisOllamaServers_, &QListWidget::currentRowChanged, this, [this, updateOllamaButtons](int row) {
+        if (row >= 0 && analysisOllamaServers_->item(row)) analysisOllamaUrlEdit_->setText(analysisOllamaServers_->item(row)->text());
+        updateOllamaButtons();
+    });
+    connect(addOllama, &QPushButton::clicked, this, [this, updateOllamaButtons]() {
+        const QString url = analysisOllamaUrlEdit_->text().trimmed();
+        if (!validOllamaUrl(url)) {
+            analysisCheckStatus_->setText(QStringLiteral("Enter an HTTP or HTTPS Ollama server address without a path or credentials."));
+            return;
+        }
+        const QList<QListWidgetItem *> matches = analysisOllamaServers_->findItems(url, Qt::MatchExactly);
+        if (!matches.isEmpty()) {
+            analysisOllamaServers_->setCurrentItem(matches.first());
+        } else {
+            analysisOllamaServers_->addItem(url);
+            analysisOllamaServers_->setCurrentRow(analysisOllamaServers_->count() - 1);
+        }
+        updateOllamaButtons();
+    });
+    connect(removeOllama, &QPushButton::clicked, this, [this, updateOllamaButtons]() {
+        const int row = analysisOllamaServers_->currentRow();
+        if (row < 0 || analysisOllamaServers_->count() <= 1) return;
+        delete analysisOllamaServers_->takeItem(row);
+        analysisOllamaServers_->setCurrentRow(qMin(row, analysisOllamaServers_->count() - 1));
+        updateOllamaButtons();
+    });
+    updateOllamaButtons();
+    connect(checkOllama, &QPushButton::clicked, this, [this, checkOllama]() {
+        if (ollamaCheckProcess_.state() != QProcess::NotRunning) return;
+        const QUrl url(analysisOllamaUrlEdit_->text().trimmed(), QUrl::StrictMode);
+        if (!url.isValid() || (url.scheme() != QStringLiteral("http") && url.scheme() != QStringLiteral("https"))
+                || url.host().isEmpty() || url.authority(QUrl::FullyEncoded).contains(QLatin1Char('@'))
+                || (!url.path().isEmpty() && url.path() != QStringLiteral("/")) || url.hasQuery() || url.hasFragment()) {
+            analysisCheckStatus_->setText(QStringLiteral("Enter an HTTP or HTTPS Ollama server address without a path or credentials.")); return;
+        }
+        const QString script = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("meeting_analysis.py"));
+        if (!QFileInfo::exists(script)) { analysisCheckStatus_->setText(QStringLiteral("Analysis helper is missing.")); return; }
+        analysisCheckStatus_->setText(QStringLiteral("Checking…")); checkOllama->setEnabled(false);
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.remove(QStringLiteral("OPENAI_API_KEY"));
+        ollamaCheckProcess_.setProcessEnvironment(env);
+        ollamaCheckProcess_.start(QStringLiteral("python3"), {script, QStringLiteral("--list-models"), QStringLiteral("--backend"), QStringLiteral("ollama"), QStringLiteral("--endpoint"), url.toString()});
+    });
+    connect(&ollamaCheckProcess_, &QProcess::finished, this, [this, checkOllama](int code, QProcess::ExitStatus status) {
+        checkOllama->setEnabled(true);
+        if (code == 0 && status == QProcess::NormalExit) {
+            const QJsonDocument doc = QJsonDocument::fromJson(ollamaCheckProcess_.readAllStandardOutput());
+            const QJsonValue models = doc.object().value(QStringLiteral("models"));
+            if (!models.isArray()) { analysisCheckStatus_->setText(QStringLiteral("Ollama returned an invalid model list.")); return; }
+            QStringList names;
+            for (const QJsonValue &value : models.toArray()) if (value.isString()) names << value.toString();
+            analysisCheckStatus_->setText(names.isEmpty() ? QStringLiteral("Connected. No supported server models found.")
+                    : QStringLiteral("Connected. Models: %1").arg(names.join(QStringLiteral(", "))));
+        } else analysisCheckStatus_->setText(QStringLiteral("Could not connect to %1. Check that it is running and the address is correct.").arg(analysisOllamaUrlEdit_->text().trimmed()));
+    });
+    connect(&ollamaCheckProcess_, &QProcess::errorOccurred, this, [this, checkOllama](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) { checkOllama->setEnabled(true); analysisCheckStatus_->setText(QStringLiteral("Python 3 was not found.")); }
+    });
+
+    connect(diarizationSetup_, &QPushButton::clicked, this, &PreferencesDialog::startDiarizationSetup);
+    connect(diarizationStop_, &QPushButton::clicked, this, [this]() {
+        setupStopping_ = true;
+        diarizationStatus_->setText(QStringLiteral("Stopping setup…"));
+        setupProcess_.terminate();
+        QTimer::singleShot(3000, this, [this]() { if (setupStopping_ && setupProcess_.state() != QProcess::NotRunning) setupProcess_.kill(); });
+    });
+    connect(&setupProcess_, &QProcess::readyReadStandardOutput, this, [this]() {
+        setupOutput_ += setupProcess_.readAllStandardOutput();
+        if (setupOutput_.size() > 16000) setupOutput_.remove(0, setupOutput_.size() - 16000);
+    });
+    connect(&setupProcess_, &QProcess::readyReadStandardError, this, [this]() {
+        setupOutput_ += setupProcess_.readAllStandardError();
+        if (setupOutput_.size() > 16000) setupOutput_.remove(0, setupOutput_.size() - 16000);
+    });
+    connect(&setupProcess_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
+        setupOutput_ += setupProcess_.readAllStandardError();
+        if (setupStopping_) { finishDiarizationSetup(QStringLiteral("Setup stopped. You can retry.")); return; }
+        if (code != 0 || status != QProcess::NormalExit) {
+            QString details = QString::fromUtf8(setupOutput_).right(1500).trimmed();
+            const QString token = huggingFaceTokenEdit_->text().trimmed();
+            if (!token.isEmpty()) details.replace(token, QStringLiteral("[token hidden]"));
+            const QString envToken = qEnvironmentVariable("HF_TOKEN");
+            if (!envToken.isEmpty()) details.replace(envToken, QStringLiteral("[token hidden]"));
+            finishDiarizationSetup(QStringLiteral("Setup failed. %1").arg(details)); return;
+        }
+        ++setupStage_;
+        nextDiarizationSetupStep();
+    });
+    connect(&setupProcess_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) finishDiarizationSetup(QStringLiteral("Could not start setup: %1").arg(setupProcess_.errorString()));
+    });
+
     contentLayout->addStretch();
     scrollArea->setWidget(content);
 
-    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    mainLayout->addWidget(buttonBox);
+    buttonBox_ = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    connect(buttonBox_, &QDialogButtonBox::accepted, this, [this]() {
+        if (diarizationRuntimeEdit_->text().trimmed().isEmpty() || huggingFaceHomeEdit_->text().trimmed().isEmpty()) {
+            diarizationStatus_->setText(QStringLiteral("Enter both the Python environment and model cache directories."));
+            return;
+        }
+        accept();
+    });
+    connect(buttonBox_, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    mainLayout->addWidget(buttonBox_);
+}
+
+void PreferencesDialog::closeEvent(QCloseEvent *event)
+{
+    if (setupStage_ != 0) { event->ignore(); return; }
+    QDialog::closeEvent(event);
+}
+
+void PreferencesDialog::reject()
+{
+    if (setupStage_ == 0) QDialog::reject();
+}
+
+void PreferencesDialog::startDiarizationSetup()
+{
+    if (setupStage_ != 0) return;
+    if (diarizationRuntimeEdit_->text().trimmed().isEmpty() || huggingFaceHomeEdit_->text().trimmed().isEmpty()) {
+        diarizationStatus_->setText(QStringLiteral("Enter both the Python environment and model cache directories.")); return;
+    }
+    if (huggingFaceTokenEdit_->text().trimmed().isEmpty() && qEnvironmentVariableIsEmpty("HF_TOKEN")) {
+        diarizationStatus_->setText(QStringLiteral("Enter a Hugging Face read token or set HF_TOKEN before starting the app.")); return;
+    }
+    if (QStandardPaths::findExecutable(QStringLiteral("python3")).isEmpty()) {
+        diarizationStatus_->setText(QStringLiteral("Python 3 was not found in PATH.")); return;
+    }
+    setupStopping_ = false; setupStage_ = 1;
+    diarizationSetup_->setEnabled(false); diarizationStop_->setEnabled(true); buttonBox_->setEnabled(false);
+    huggingFaceTokenEdit_->setEnabled(false); huggingFaceHomeEdit_->setEnabled(false); diarizationRuntimeEdit_->setEnabled(false);
+    nextDiarizationSetupStep();
+}
+
+void PreferencesDialog::nextDiarizationSetupStep()
+{
+    setupOutput_.clear();
+    const QString runtime = AppSettings::expandUserPath(diarizationRuntimeEdit_->text().trimmed());
+    const QString python = QDir(runtime).filePath(QStringLiteral("bin/python"));
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    QString program = python;
+    QStringList arguments;
+    if (setupStage_ == 1) {
+        diarizationStatus_->setText(QStringLiteral("Creating Python environment…"));
+        program = QStringLiteral("python3"); arguments = {QStringLiteral("-m"), QStringLiteral("venv"), runtime};
+    } else if (setupStage_ == 2) {
+        diarizationStatus_->setText(QStringLiteral("Installing CPU PyTorch (this may take several minutes)…"));
+        arguments = {QStringLiteral("-m"), QStringLiteral("pip"), QStringLiteral("install"), QStringLiteral("torch"), QStringLiteral("torchaudio"), QStringLiteral("--index-url"), QStringLiteral("https://download.pytorch.org/whl/cpu")};
+    } else if (setupStage_ == 3) {
+        diarizationStatus_->setText(QStringLiteral("Installing speaker identification dependencies…"));
+        arguments = {QStringLiteral("-m"), QStringLiteral("pip"), QStringLiteral("install"), QStringLiteral("pyannote.audio")};
+    } else if (setupStage_ == 4) {
+        diarizationStatus_->setText(QStringLiteral("Downloading and checking the speaker model…"));
+        environment.insert(QStringLiteral("HF_HOME"), AppSettings::expandUserPath(huggingFaceHomeEdit_->text().trimmed()));
+        environment.remove(QStringLiteral("HF_HUB_CACHE"));
+        environment.remove(QStringLiteral("HUGGINGFACE_HUB_CACHE"));
+        if (!huggingFaceTokenEdit_->text().trimmed().isEmpty()) environment.insert(QStringLiteral("HF_TOKEN"), huggingFaceTokenEdit_->text().trimmed());
+        arguments = {QStringLiteral("-c"), QStringLiteral(
+                "import os, torch, warnings\n"
+                "warnings.filterwarnings('ignore', message=r'(?s).*torchcodec is not installed correctly.*', category=UserWarning, module=r'pyannote\\.audio\\.core\\.io')\n"
+                "from pyannote.audio import Pipeline\n"
+                "p = Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', token=os.environ.get('HF_TOKEN'))\n"
+                "assert p is not None, 'Model unavailable; accept its conditions and check the token'\n"
+                "p({'waveform': torch.zeros((1, 16000 * 3)), 'sample_rate': 16000})\n")};
+    } else {
+        finishDiarizationSetup(QStringLiteral("Integration ready. Press OK to save these settings.")); return;
+    }
+    if (setupStage_ != 4) environment.remove(QStringLiteral("HF_TOKEN"));
+    setupProcess_.setProcessEnvironment(environment);
+    setupProcess_.start(program, arguments);
+}
+
+void PreferencesDialog::finishDiarizationSetup(const QString &message)
+{
+    setupStage_ = 0;
+    diarizationSetup_->setEnabled(true); diarizationStop_->setEnabled(false); buttonBox_->setEnabled(true);
+    huggingFaceTokenEdit_->setEnabled(true); huggingFaceHomeEdit_->setEnabled(true); diarizationRuntimeEdit_->setEnabled(true);
+    diarizationStatus_->setText(message);
 }
 
 AppSettings PreferencesDialog::editedSettings() const
@@ -211,5 +499,20 @@ AppSettings PreferencesDialog::editedSettings() const
     }();
     edited.handoffDirectory = handoffDirectoryEdit_->text().trimmed();
     edited.handoffTriggerWords = handoffTriggerWordsEdit_->text().trimmed();
+    edited.meetingsDirectory = meetingsDirectoryEdit_->text().trimmed();
+    edited.huggingFaceToken = huggingFaceTokenEdit_->text().trimmed();
+    edited.huggingFaceHome = huggingFaceHomeEdit_->text().trimmed();
+    edited.diarizationRuntimeDirectory = diarizationRuntimeEdit_->text().trimmed();
+    edited.analysisOllamaUrls.clear();
+    for (int row = 0; row < analysisOllamaServers_->count(); ++row)
+        edited.analysisOllamaUrls.append(analysisOllamaServers_->item(row)->text().trimmed());
+    const int selectedRow = analysisOllamaServers_->currentRow();
+    const QString editedUrl = analysisOllamaUrlEdit_->text().trimmed();
+    if (selectedRow >= 0 && selectedRow < edited.analysisOllamaUrls.size() && validOllamaUrl(editedUrl))
+        edited.analysisOllamaUrls[selectedRow] = editedUrl;
+    if (!baseSettings_.settingsPath.isEmpty()) {
+        QSettings stored(baseSettings_.settingsPath, QSettings::IniFormat);
+        edited.analysisOllamaModel = stored.value(QStringLiteral("analysis_ollama_model"), edited.analysisOllamaModel).toString();
+    }
     return edited;
 }

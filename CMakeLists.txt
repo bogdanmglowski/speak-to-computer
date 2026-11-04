@@ -35,6 +35,12 @@ add_executable(speak-to-computer
     src/WavWriter.h
     src/WhisperRunner.cpp
     src/WhisperRunner.h
+    src/MeetingStore.cpp
+    src/MeetingStore.h
+    src/MeetingDialog.cpp
+    src/MeetingDialog.h
+    src/MeetingAnalysisDialog.cpp
+    src/MeetingAnalysisDialog.h
     src/WakeWordListener.cpp
     src/WakeWordListener.h
     src/X11Hotkey.cpp
@@ -60,6 +66,11 @@ target_link_libraries(speak-to-computer PRIVATE
     ${X11_LIBRARIES}
 )
 
+# Re-run the post-build copy when the sidecar changes.
+set_property(TARGET speak-to-computer APPEND PROPERTY LINK_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/meeting_diarization.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/meeting_analysis.py)
+
 add_custom_command(TARGET speak-to-computer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
     ${CMAKE_CURRENT_SOURCE_DIR}/src/activation_sound.wav
@@ -69,6 +80,12 @@ add_custom_command(TARGET speak-to-computer POST_BUILD
     $<TARGET_FILE_DIR:speak-to-computer>
     COMMAND ${CMAKE_COMMAND} -E copy
     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/openwakeword_sidecar.py
+    $<TARGET_FILE_DIR:speak-to-computer>
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/meeting_diarization.py
+    $<TARGET_FILE_DIR:speak-to-computer>
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/meeting_analysis.py
     $<TARGET_FILE_DIR:speak-to-computer>
     COMMAND ${CMAKE_COMMAND} -E copy
     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/install-openwakeword-runtime.sh
@@ -95,6 +112,8 @@ if(BUILD_TESTING)
         src/FileHandoff.h
         src/OverlayWidget.cpp
         src/OverlayWidget.h
+        src/PreferencesDialog.cpp
+        src/PreferencesDialog.h
         src/TranscriptCleaner.cpp
         src/TranscriptCleaner.h
         src/VadEndpointDetector.cpp
@@ -105,6 +124,12 @@ if(BUILD_TESTING)
         src/WavWriter.h
         src/WhisperRunner.cpp
         src/WhisperRunner.h
+        src/MeetingStore.cpp
+        src/MeetingStore.h
+        src/MeetingDialog.cpp
+        src/MeetingDialog.h
+        src/MeetingAnalysisDialog.cpp
+        src/MeetingAnalysisDialog.h
         tests/CoreBehaviorTest.cpp
     )
 
@@ -112,4 +137,9 @@ if(BUILD_TESTING)
     target_link_libraries(speak-to-computer-tests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 
     add_test(NAME speak-to-computer-core COMMAND speak-to-computer-tests)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME meeting-diarization COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_meeting_diarization.py)
+        add_test(NAME meeting-analysis COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_meeting_analysis.py)
+    endif()
 endif()

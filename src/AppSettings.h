@@ -28,6 +28,12 @@ struct AppSettings {
     QString outputTarget = QStringLiteral("clipboard");
     QString handoffDirectory = QStringLiteral("/tmp/agent");
     QString handoffTriggerWords;
+    QString meetingsDirectory;
+    QString diarizationRuntimeDirectory;
+    QString huggingFaceHome;
+    QString huggingFaceToken;
+    QStringList analysisOllamaUrls{QStringLiteral("http://127.0.0.1:11434")};
+    QString analysisOllamaModel = QStringLiteral("qwen3:8b");
 
     static QString expandUserPath(const QString &path);
     static QString modelLabel(const QString &modelPath);

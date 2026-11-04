@@ -16,14 +16,17 @@
 #include <QStringList>
 #include <QSystemTrayIcon>
 #include <QTimer>
+#include <memory>
 
 class QAction;
+class MeetingDialog;
 
 class SpeakToComputerApp : public QObject {
     Q_OBJECT
 
 public:
     explicit SpeakToComputerApp(const AppSettings &settings, QObject *parent = nullptr);
+    ~SpeakToComputerApp() override;
 
     bool start();
 
@@ -95,15 +98,21 @@ private:
     OverlayWidget overlay_;
     AudioRecorder recorder_;
     WhisperRunner whisper_;
+    std::unique_ptr<MeetingDialog> meetingDialog_;
     ClipboardPaster paster_;
     FileHandoff handoff_;
     QMenu trayMenu_;
     QSystemTrayIcon trayIcon_;
+    QIcon idleTrayIcon_;
+    QIcon recordingTrayIcon_;
+    QIcon transcribingTrayIcon_;
+    int currentTrayIcon_ = -1;
     QTimer elapsedTimer_;
     QElapsedTimer recordingClock_;
     QElapsedTimer hotkeyDebounce_;
     QAction *trayStatusAction_ = nullptr;
     QAction *trayPreferencesAction_ = nullptr;
+    QAction *trayStopMeetingAction_ = nullptr;
     QAction *trayWakeWordAction_ = nullptr;
     QAction *trayVadAutostopAction_ = nullptr;
     QAction *trayQuitAction_ = nullptr;

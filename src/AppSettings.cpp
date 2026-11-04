@@ -2,6 +2,8 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QFile>
+#include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -32,6 +34,21 @@ QString bundledEndSound()
 QString defaultWakeWordPhrase()
 {
     return QStringLiteral("alexa");
+}
+
+QStringList defaultOllamaUrls()
+{
+    return {QStringLiteral("http://127.0.0.1:11434")};
+}
+
+QStringList migrateOllamaUrls(const QString &legacyUrl)
+{
+    QStringList urls;
+    if (!legacyUrl.isEmpty()) urls.append(legacyUrl);
+    for (const QString &url : defaultOllamaUrls()) {
+        if (!urls.contains(url)) urls.append(url);
+    }
+    return urls;
 }
 
 QString appDataRootPath()
@@ -76,6 +93,18 @@ QString modelDirectoryPathFor(const QString &currentModelPath)
 
 void ensureDefaults(QSettings *settings)
 {
+    if (!settings->contains(QStringLiteral("analysis_ollama_urls"))) {
+        const QString legacyUrl = settings->value(QStringLiteral("analysis_ollama_url")).toString().trimmed();
+        settings->setValue(QStringLiteral("analysis_ollama_urls"), migrateOllamaUrls(legacyUrl));
+    }
+    if (!settings->contains(QStringLiteral("analysis_ollama_model"))) settings->setValue(QStringLiteral("analysis_ollama_model"), QStringLiteral("qwen3:8b"));
+    if (!settings->contains(QStringLiteral("diarization_runtime_directory")))
+        settings->setValue(QStringLiteral("diarization_runtime_directory"), QDir(appDataRootPath()).filePath(QStringLiteral("diarization/.venv")));
+    if (!settings->contains(QStringLiteral("huggingface_home")))
+        settings->setValue(QStringLiteral("huggingface_home"), qEnvironmentVariable("HF_HOME", QDir(QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation)).filePath(QStringLiteral("huggingface"))));
+    if (!settings->contains(QStringLiteral("meetings_directory"))) {
+        settings->setValue(QStringLiteral("meetings_directory"), QDir(appDataRootPath()).filePath(QStringLiteral("meetings")));
+    }
     if (!settings->contains(QStringLiteral("hotkey_dictate"))) {
         const QString legacyHotkey = settings->value(QStringLiteral("hotkey")).toString().trimmed();
         settings->setValue(QStringLiteral("hotkey_dictate"),
@@ -260,6 +289,21 @@ bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
     }
 
     QDir().mkpath(QFileInfo(settingsData.settingsPath).absolutePath());
+    const QString tokenPath = QDir(QFileInfo(settingsData.settingsPath).absolutePath()).filePath(QStringLiteral("huggingface-token"));
+    if (settingsData.huggingFaceToken.trimmed().isEmpty()) {
+        if (QFile::exists(tokenPath) && !QFile::remove(tokenPath)) {
+            if (errorMessage) *errorMessage = QStringLiteral("Could not remove Hugging Face token file.");
+            return false;
+        }
+    } else {
+        QSaveFile tokenFile(tokenPath);
+        const QByteArray tokenBytes = settingsData.huggingFaceToken.trimmed().toUtf8();
+        if (!tokenFile.open(QIODevice::WriteOnly) || !tokenFile.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)
+                || tokenFile.write(tokenBytes) != tokenBytes.size() || !tokenFile.commit()) {
+            if (errorMessage) *errorMessage = QStringLiteral("Could not save Hugging Face token file securely.");
+            return false;
+        }
+    }
     QSettings settings(settingsData.settingsPath, QSettings::IniFormat);
     settings.setValue(QStringLiteral("hotkey_dictate"), settingsData.hotkeyDictate.trimmed());
     settings.setValue(QStringLiteral("hotkey_translate_en"), settingsData.hotkeyTranslateEn.trimmed());
@@ -283,6 +327,22 @@ bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
     settings.setValue(QStringLiteral("output_target"), settingsData.outputTarget.trimmed());
     settings.setValue(QStringLiteral("handoff_directory"), settingsData.handoffDirectory.trimmed());
     settings.setValue(QStringLiteral("handoff_trigger_words"), settingsData.handoffTriggerWords.trimmed());
+    QStringList ollamaUrls;
+    for (const QString &url : settingsData.analysisOllamaUrls) {
+        const QString normalized = url.trimmed();
+        if (!normalized.isEmpty() && !ollamaUrls.contains(normalized)) ollamaUrls.append(normalized);
+    }
+    if (ollamaUrls.isEmpty()) ollamaUrls = defaultOllamaUrls();
+    settings.setValue(QStringLiteral("analysis_ollama_urls"), ollamaUrls);
+    settings.remove(QStringLiteral("analysis_ollama_url"));
+    settings.setValue(QStringLiteral("analysis_ollama_model"), settingsData.analysisOllamaModel.trimmed());
+    settings.remove(QStringLiteral("analysis_codex_cli"));
+    settings.setValue(QStringLiteral("meetings_directory"), settingsData.meetingsDirectory.trimmed().isEmpty()
+            ? QDir(appDataRootPath()).filePath(QStringLiteral("meetings")) : settingsData.meetingsDirectory.trimmed());
+    if (!settingsData.diarizationRuntimeDirectory.trimmed().isEmpty())
+        settings.setValue(QStringLiteral("diarization_runtime_directory"), settingsData.diarizationRuntimeDirectory.trimmed());
+    if (!settingsData.huggingFaceHome.trimmed().isEmpty())
+        settings.setValue(QStringLiteral("huggingface_home"), settingsData.huggingFaceHome.trimmed());
     settings.sync();
 
     if (settings.status() == QSettings::NoError) {
@@ -399,6 +459,22 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     result.outputTarget = settings.value(QStringLiteral("output_target")).toString().trimmed();
     result.handoffDirectory = settings.value(QStringLiteral("handoff_directory")).toString().trimmed();
     result.handoffTriggerWords = settings.value(QStringLiteral("handoff_trigger_words")).toString().trimmed();
+    result.analysisOllamaUrls = settings.value(QStringLiteral("analysis_ollama_urls")).toStringList();
+    if (result.analysisOllamaUrls.isEmpty()) {
+        const QString legacyUrl = settings.value(QStringLiteral("analysis_ollama_url")).toString().trimmed();
+        result.analysisOllamaUrls = migrateOllamaUrls(legacyUrl);
+    }
+    for (QString &url : result.analysisOllamaUrls) url = url.trimmed();
+    result.analysisOllamaUrls.removeAll(QString());
+    result.analysisOllamaModel = settings.value(QStringLiteral("analysis_ollama_model")).toString().trimmed();
+    result.meetingsDirectory = expandUserPath(settings.value(QStringLiteral("meetings_directory")).toString().trimmed());
+    result.diarizationRuntimeDirectory = expandUserPath(settings.value(QStringLiteral("diarization_runtime_directory")).toString().trimmed());
+    result.huggingFaceHome = expandUserPath(settings.value(QStringLiteral("huggingface_home")).toString().trimmed());
+    QFile tokenFile(QDir(QFileInfo(settingsPath).absolutePath()).filePath(QStringLiteral("huggingface-token")));
+    if (tokenFile.open(QIODevice::ReadOnly)) result.huggingFaceToken = QString::fromUtf8(tokenFile.readAll()).trimmed();
+    if (result.meetingsDirectory.isEmpty()) {
+        result.meetingsDirectory = QDir(appDataRootPath()).filePath(QStringLiteral("meetings"));
+    }
 
     if (result.wakeWordPhrase.isEmpty()) {
         result.wakeWordPhrase = defaultWakeWordPhrase();
