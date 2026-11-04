@@ -106,6 +106,11 @@ off by default; enabling it can execute commands in a terminal. Push-to-talk
 ignores VAD auto-stop and always pastes, even when file handoff is selected.
 Push-to-talk requires a batch engine, not Realtime.
 
+The optional send keyword is `go` by default. When enabled, Realtime and batch
+transcription recognize that whole word at the end of a pasted result, remove it,
+and press Enter. For batch engines this happens after Whisper/BuzzASR/Parakeet
+finishes; handoff-to-file output is not sent to a terminal.
+
 The bundled soft start and stop sounds come from Hex and include its MIT license.
 Custom sound paths in Preferences remain unchanged.
 
