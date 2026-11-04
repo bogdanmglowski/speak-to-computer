@@ -1,7 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect x="4" y="4" width="56" height="56" rx="12" fill="#16181c" stroke="#ffffff" stroke-opacity=".22" stroke-width="2"/>
-  <circle cx="32" cy="32" r="20" fill="#e5464e"/>
-  <rect x="24" y="13" width="16" height="27" rx="8" fill="#f5f7fa"/>
-  <path d="M32 40v10M24 50h16" fill="none" stroke="#f5f7fa" stroke-width="4" stroke-linecap="round"/>
-  <path d="M29 21h6M29 28h6" fill="none" stroke="#16181c" stroke-width="3" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#ef5260"/>
+      <stop offset="1" stop-color="#b92136"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#background)"/>
+  <rect x="3" y="3" width="58" height="58" rx="15" fill="none" stroke="#ffffff" stroke-opacity=".14"/>
+  <rect x="25" y="12" width="14" height="27" rx="7" fill="#f4f8ff"/>
+  <path d="M20 30v3a12 12 0 0 0 24 0v-3M32 45v7M25 52h14" fill="none" stroke="#ffe2e5" stroke-width="4" stroke-linecap="round"/>
+  <path d="M29 21h6M29 27h6" fill="none" stroke="#b92136" stroke-width="2" stroke-linecap="round"/>
 </svg>

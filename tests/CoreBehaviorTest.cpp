@@ -1,9 +1,13 @@
 #include "AppSettings.h"
 #include "AudioRecorder.h"
+#include "BuzzAsrRunner.h"
+#include "ClipboardPaster.h"
+#include "GpuMonitor.h"
 #include "MeetingDialog.h"
 #include "MeetingAnalysisDialog.h"
 #include "MeetingStore.h"
 #include "OverlayWidget.h"
+#include "ParakeetRunner.h"
 #include "PreferencesDialog.h"
 #include "TranscriptCleaner.h"
 #include "VadEndpointDetector.h"
@@ -12,6 +16,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QDir>
 #include <QFile>
 #include <QKeyEvent>
@@ -28,6 +33,10 @@
 #include <QTimer>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QScopeGuard>
+#include <QStandardPaths>
+#include <QIcon>
+#include <QRadioButton>
 #include <QTemporaryDir>
 #include <QtTest>
 #include <QtEndian>
@@ -39,6 +48,21 @@ class CoreBehaviorTest : public QObject {
 
 private slots:
     void settingsShouldExpandHomePath();
+    void settingsShouldSaveParakeetAndPushToTalk();
+    void settingsShouldRejectReservedPushToTalkButtons();
+    void parakeetRunnerShouldHandleUnicodeAndErrors();
+    void parakeetRunnerShouldExcludeNxPreload();
+    void settingsShouldMigrateTemporaryBuzzAsrRuntime();
+    void buzzAsrShouldPreserveUnicodePathsWithoutUnsupportedPrompts();
+    void buzzAsrShouldReportStartupErrorBeforeProcessExit();
+    void clipboardCopyShouldNotSendKeystrokes();
+    void clipboardClassicPasteShouldUseCtrlVWithoutXclip();
+    void clipboardClassicPasteShouldServeSelectionBeforeEnter();
+    void herdrGpuiShouldPasteWithCtrlShiftV();
+    void focusPasteShouldReadActiveWindowClass();
+    void emptyResultAlertShouldHideItself();
+    void iconShouldRenderAtTraySize();
+    void vadEndpointShouldAllowThinkingPause();
     void settingsShouldResolveModelLabel();
     void settingsShouldReturnOnlyExistingModelPaths();
     void settingsShouldSaveModelPath();
@@ -53,6 +77,12 @@ private slots:
     void meetingSpeakerTranscriptionShouldSaveAndRename();
     void meetingAnalysisShouldSaveVersionsAndDetectChanges();
     void meetingAudioFilterShouldPreserveSeparateChannels();
+    void settingsShouldDefaultPasteTargetToPin();
+    void settingsShouldDefaultToClassicPasteBehavior();
+    void transcriptShouldStripTrailingSendKeyword();
+    void settingsShouldSaveAndReloadMiniOverlayToggle();
+    void preferencesShouldReturnMiniOverlayToggle();
+    void preferencesShouldExposePasteBehaviorRadioButtons();
     void settingsShouldLoadSeparateHotkeyDefaults();
     void settingsShouldMigrateLegacyHotkeyToDictationHotkey();
     void settingsShouldIgnoreTranslateToEnglishAsSavedMode();
@@ -67,7 +97,18 @@ private slots:
     void settingsShouldMigrateLegacyConfigWithoutVadKeys();
     void settingsShouldMigrateLegacyWakeWordRuntimeDefaults();
     void settingsShouldMigrateAppDataWakeWordRuntimeDefaults();
-    void overlayShouldRequestCloseOnEscape();
+    void overlayShouldRequestCloseOnShiftEscape();
+    void overlayShouldIgnoreBareEscape();
+    void overlayShouldShowVoiceAmplitudeAboveTheMeterLine();
+    void overlayShouldResetVoiceAmplitudeForNewRecording();
+    void overlayShouldReturnToFlatWaveformDuringSilence();
+    void overlayShouldKeepVoiceShapeStationary();
+    void overlayExpandedShouldSeparateHeaderFromControls();
+    void overlayMiniShouldHaveNoPanelBackground();
+    void overlayMiniShouldKeepErrorsAndTranscriptionInFullView();
+    void overlayMiniShouldNotActivateInvisibleControls();
+    void gpuMonitorShouldRefreshAndHandleUnavailableMetrics();
+    void overlayShouldShowGpuUpdatesDuringTranscription();
     void cleanupShouldTrimAndJoinTranscriptLines();
     void cleanupShouldDropWhisperNonSpeechAnnotations();
     void whisperRunnerShouldPassTranslateFlagWhenEnabled();
@@ -158,6 +199,102 @@ QByteArray vadFrame(bool speech)
 
 } // namespace
 
+void CoreBehaviorTest::settingsShouldSaveParakeetAndPushToTalk()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    AppSettings settings = AppSettings::loadFromPath(path);
+    QCOMPARE(settings.pushToTalkButton, 11);
+    QVERIFY(!settings.pushToTalkSendEnter);
+    settings.engine = QString::fromUtf8(AppSettings::kEngineParakeet);
+    settings.pushToTalkButton = 12;
+    settings.pushToTalkSendEnter = true;
+    QString errorMessage;
+    QVERIFY2(AppSettings::save(settings, &errorMessage), qPrintable(errorMessage));
+    const AppSettings loaded = AppSettings::loadFromPath(path);
+    QVERIFY(loaded.isParakeetEngine());
+    QVERIFY(!loaded.isWhisperCppEngine());
+    QCOMPARE(loaded.pushToTalkButton, 12);
+    QVERIFY(loaded.pushToTalkSendEnter);
+}
+
+void CoreBehaviorTest::settingsShouldRejectReservedPushToTalkButtons()
+{
+    QTemporaryDir dir;
+    AppSettings settings = AppSettings::loadFromPath(dir.filePath(QStringLiteral("settings.ini")));
+    QString errorMessage;
+    for (int button : {1, 7, 9, 10, 256}) {
+        settings.pushToTalkButton = button;
+        QVERIFY(!AppSettings::save(settings, &errorMessage));
+        QVERIFY(!errorMessage.isEmpty());
+    }
+    settings.pushToTalkButton = 0;
+    QVERIFY2(AppSettings::save(settings, &errorMessage), qPrintable(errorMessage));
+}
+
+void CoreBehaviorTest::parakeetRunnerShouldHandleUnicodeAndErrors()
+{
+    QTemporaryDir dir;
+    AppSettings settings;
+    settings.parakeetPython = QStringLiteral("/usr/bin/python3");
+    settings.parakeetScript = createFile(&dir, QStringLiteral("fake parakeet.py"), R"PY(
+import json, os, time
+with open(os.environ['INBOX'], 'a+', encoding='utf-8') as inbox:
+    inbox.seek(0, 2)
+    print(json.dumps({'ready': True}), flush=True)
+    while True:
+        line = inbox.readline()
+        if not line:
+            time.sleep(0.01)
+            continue
+        request = json.loads(line)
+        if request['wav_path'] == 'missing':
+            print(json.dumps({'error': 'missing audio'}), flush=True)
+        else:
+            print(json.dumps({'text': 'Zażółć ' + request['wav_path']}), flush=True)
+)PY");
+    ParakeetRunner runner;
+    QSignalSpy ready(&runner, &ParakeetRunner::transcriptionReady);
+    QSignalSpy failed(&runner, &ParakeetRunner::failed);
+    runner.transcribe(QStringLiteral("/audio/gęślą.wav"), settings);
+    QTRY_COMPARE_WITH_TIMEOUT(ready.count(), 1, 5000);
+    QCOMPARE(ready.at(0).at(0).toString(), QStringLiteral("Zażółć /audio/gęślą.wav"));
+    runner.transcribe(QStringLiteral("missing"), settings);
+    QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 5000);
+    QVERIFY(failed.at(0).at(0).toString().contains(QStringLiteral("missing audio")));
+}
+
+void CoreBehaviorTest::parakeetRunnerShouldExcludeNxPreload()
+{
+    QTemporaryDir dir;
+    const QByteArray previousPreload = qgetenv("LD_PRELOAD");
+    const bool hadPreload = qEnvironmentVariableIsSet("LD_PRELOAD");
+    const auto restoreEnvironment = qScopeGuard([&]() {
+        if (hadPreload) {
+            qputenv("LD_PRELOAD", previousPreload);
+        } else {
+            qunsetenv("LD_PRELOAD");
+        }
+    });
+    qputenv("LD_PRELOAD", "/usr/NX/lib/libnxegl.so:libc.so.6");
+    AppSettings settings;
+    settings.parakeetPython = QStringLiteral("/usr/bin/python3");
+    settings.parakeetScript = createFile(&dir, QStringLiteral("preload.py"), R"PY(
+import json, os, time
+with open(os.environ['INBOX'], 'a+', encoding='utf-8') as inbox:
+    inbox.seek(0, 2)
+    print(json.dumps({'ready': True}), flush=True)
+    while not inbox.readline():
+        time.sleep(0.01)
+    print(json.dumps({'text': os.environ.get('LD_PRELOAD', '')}), flush=True)
+)PY");
+    ParakeetRunner runner;
+    QSignalSpy ready(&runner, &ParakeetRunner::transcriptionReady);
+    runner.transcribe(QStringLiteral("/audio/test.wav"), settings);
+    QTRY_COMPARE_WITH_TIMEOUT(ready.count(), 1, 5000);
+    QCOMPARE(ready.at(0).at(0).toString(), QStringLiteral("libc.so.6"));
+}
+
 void CoreBehaviorTest::settingsShouldExpandHomePath()
 {
     QCOMPARE(AppSettings::expandUserPath(QStringLiteral("~")), QDir::homePath());
@@ -167,6 +304,406 @@ void CoreBehaviorTest::settingsShouldExpandHomePath()
             QStringLiteral("/opt/whisper-cli"));
     QCOMPARE(AppSettings::expandUserPath(QStringLiteral("~other/whisper-cli")),
             QStringLiteral("~other/whisper-cli"));
+}
+
+void CoreBehaviorTest::overlayShouldShowVoiceAmplitudeAboveTheMeterLine()
+{
+    OverlayWidget overlay;
+    overlay.showRecording(QStringLiteral("Test"), {});
+    const QImage silent = overlay.grab().toImage();
+    overlay.setAudioLevel(1.0);
+    const QImage loud = overlay.grab().toImage();
+    int changedPixelCount = 0;
+    for (int yPx = overlay.height() - 48; yPx < overlay.height() - 40; ++yPx) {
+        for (int xPx = 64; xPx < 264; ++xPx) {
+            if (silent.pixel(xPx, yPx) != loud.pixel(xPx, yPx)) {
+                ++changedPixelCount;
+            }
+        }
+    }
+    QVERIFY(changedPixelCount > 100);
+}
+
+void CoreBehaviorTest::overlayShouldResetVoiceAmplitudeForNewRecording()
+{
+    OverlayWidget overlay;
+    overlay.showRecording(QStringLiteral("Test"), {});
+    const QImage silent = overlay.grab().toImage();
+    overlay.setAudioLevel(0.8);
+    overlay.showTranscribing(QStringLiteral("Test"));
+    overlay.showRecording(QStringLiteral("Test"), {});
+    QCOMPARE(overlay.grab().toImage(), silent);
+}
+
+void CoreBehaviorTest::overlayShouldReturnToFlatWaveformDuringSilence()
+{
+    OverlayWidget overlay;
+    overlay.showRecording(QStringLiteral("Test"), {});
+    const QImage silent = overlay.grab().toImage();
+    overlay.setAudioLevel(0.8);
+    overlay.setAudioLevel(0.0);
+    QCOMPARE(overlay.grab().toImage(), silent);
+}
+
+void CoreBehaviorTest::overlayShouldKeepVoiceShapeStationary()
+{
+    OverlayWidget overlay;
+    overlay.showRecording(QStringLiteral("Test"), {});
+    overlay.setAudioLevel(0.8);
+    const QImage firstPulse = overlay.grab().toImage();
+    overlay.setAudioLevel(0.2);
+    overlay.setAudioLevel(0.8);
+    QCOMPARE(overlay.grab().toImage(), firstPulse);
+}
+
+void CoreBehaviorTest::overlayExpandedShouldSeparateHeaderFromControls()
+{
+    OverlayWidget overlay;
+    overlay.showRecording(QStringLiteral("Recording"), {});
+
+    QCOMPARE(overlay.width(), 600);
+    QCOMPARE(overlay.height(), 202);
+}
+
+void CoreBehaviorTest::settingsShouldSaveAndReloadMiniOverlayToggle()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    AppSettings settings = AppSettings::loadFromPath(path);
+    QVERIFY(!settings.miniOverlayEnabled);
+    settings.miniOverlayEnabled = true;
+    QString errorMessage;
+    QVERIFY2(AppSettings::save(settings, &errorMessage), qPrintable(errorMessage));
+    QVERIFY(AppSettings::loadFromPath(path).miniOverlayEnabled);
+    QVERIFY2(AppSettings::saveMiniOverlayEnabled(path, false, &errorMessage), qPrintable(errorMessage));
+    QVERIFY(!AppSettings::loadFromPath(path).miniOverlayEnabled);
+}
+
+void CoreBehaviorTest::preferencesShouldReturnMiniOverlayToggle()
+{
+    AppSettings settings;
+    PreferencesDialog dialog(settings);
+    QCheckBox *miniCheck = nullptr;
+    for (QCheckBox *check : dialog.findChildren<QCheckBox *>()) {
+        if (check->text() == QStringLiteral("Tryb mini")) {
+            miniCheck = check;
+        }
+    }
+    QVERIFY(miniCheck != nullptr);
+    QVERIFY(!miniCheck->isChecked());
+    miniCheck->setChecked(true);
+    QVERIFY(dialog.editedSettings().miniOverlayEnabled);
+    miniCheck->setChecked(false);
+    QVERIFY(!dialog.editedSettings().miniOverlayEnabled);
+}
+
+void CoreBehaviorTest::preferencesShouldExposePasteBehaviorRadioButtons()
+{
+    AppSettings settings;
+    settings.pasteBehavior = QString::fromUtf8(AppSettings::kPasteBehaviorTerminalCompatible);
+    PreferencesDialog dialog(settings);
+
+    QRadioButton *classic = nullptr;
+    QRadioButton *terminal = nullptr;
+    for (QRadioButton *radio : dialog.findChildren<QRadioButton *>()) {
+        if (radio->text() == QStringLiteral("Klasyczne wklejanie")) {
+            classic = radio;
+        } else if (radio->text() == QStringLiteral("Wklejanie kompatybilne z terminalami")) {
+            terminal = radio;
+        }
+    }
+
+    QVERIFY(classic != nullptr);
+    QVERIFY(terminal != nullptr);
+    QVERIFY(!classic->isChecked());
+    QVERIFY(terminal->isChecked());
+    QCOMPARE(dialog.editedSettings().pasteBehavior,
+            QString::fromUtf8(AppSettings::kPasteBehaviorTerminalCompatible));
+
+    classic->setChecked(true);
+    QCOMPARE(dialog.editedSettings().pasteBehavior,
+            QString::fromUtf8(AppSettings::kPasteBehaviorClassic));
+}
+
+void CoreBehaviorTest::overlayMiniShouldHaveNoPanelBackground()
+{
+    OverlayWidget overlay;
+    overlay.setMiniModeEnabled(true);
+    overlay.showRecording(QStringLiteral("Original (Polish)"), {QStringLiteral("Hidden hint")});
+    overlay.setAudioLevel(0.8);
+    overlay.setElapsedMs(12000);
+    overlay.setGpuMemoryLabel(QStringLiteral("GPU 6280/8151 MB"));
+    const QImage image = overlay.grab().toImage();
+    QCOMPARE(overlay.size(), QSize(380, 56));
+    QCOMPARE(image.pixelColor(24, 12).alpha(), 0);
+}
+
+void CoreBehaviorTest::gpuMonitorShouldRefreshAndHandleUnavailableMetrics()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString executable = createExecutable(&dir, QStringLiteral("nvidia-smi"),
+            "#!/bin/sh\necho '42, 201, 8188'\n");
+    QVERIFY(!executable.isEmpty());
+    QString label;
+    GpuMonitor monitor([&label](const QString &value) { label = value; }, executable, 100);
+    monitor.start();
+    QTRY_COMPARE(label, QStringLiteral("GPU 42% · 201/8188 MB"));
+    QVERIFY(!createExecutable(&dir, QStringLiteral("nvidia-smi"),
+            "#!/bin/sh\necho 'N/A, 2100, 8188'\n").isEmpty());
+    QTRY_COMPARE(label, QStringLiteral("GPU — · 2100/8188 MB"));
+    QVERIFY(!createExecutable(&dir, QStringLiteral("nvidia-smi"),
+            "#!/bin/sh\nexit 1\n").isEmpty());
+    QTRY_VERIFY(label.isEmpty());
+    monitor.stop();
+}
+
+void CoreBehaviorTest::overlayShouldShowGpuUpdatesDuringTranscription()
+{
+    OverlayWidget overlay;
+    overlay.showTranscribing(QStringLiteral("Original"));
+    overlay.setGpuMemoryLabel(QString());
+    const QImage before = overlay.grab().toImage();
+    overlay.setGpuMemoryLabel(QStringLiteral("GPU 42% · 2100/8188 MB"));
+    const QImage after = overlay.grab().toImage();
+    QVERIFY(before != after);
+}
+
+void CoreBehaviorTest::overlayMiniShouldKeepErrorsAndTranscriptionInFullView()
+{
+    OverlayWidget overlay;
+    overlay.setMiniModeEnabled(true);
+    overlay.showRecording(QStringLiteral("Test"), {});
+    const QSize miniSize = overlay.size();
+    overlay.showTranscribing(QStringLiteral("Test"));
+    QVERIFY(overlay.width() > miniSize.width());
+    QVERIFY(overlay.height() > miniSize.height());
+    overlay.showError(QStringLiteral("CUDA error"));
+    QVERIFY(overlay.height() > miniSize.height());
+    QVERIFY(overlay.grab().toImage().pixelColor(24, 12).alpha() > 0);
+    overlay.showRecording(QStringLiteral("Test"), {});
+    QCOMPARE(overlay.size(), miniSize);
+    overlay.setMiniModeEnabled(false);
+    QVERIFY(overlay.width() > miniSize.width());
+}
+
+void CoreBehaviorTest::overlayMiniShouldNotActivateInvisibleControls()
+{
+    OverlayWidget overlay;
+    overlay.setMiniModeEnabled(true);
+    overlay.showRecording(QStringLiteral("Test"), {});
+    QSignalSpy closed(&overlay, &OverlayWidget::closeRequested);
+    QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(overlay.width() - 30, 30));
+    QCOMPARE(closed.count(), 0);
+    QTest::keyClick(&overlay, Qt::Key_Escape, Qt::ShiftModifier);
+    QCOMPARE(closed.count(), 1);
+}
+
+void CoreBehaviorTest::settingsShouldMigrateTemporaryBuzzAsrRuntime()
+{
+    QTemporaryDir dir;
+    const QString path = createFile(&dir, QStringLiteral("settings.ini"),
+            "[General]\nbuzzasr_python=/tmp/opencode/cer-poc/.venv/bin/python\nbuzzasr_script=/old/source/scripts/buzzasr_transcribe.py\n");
+    const AppSettings settings = AppSettings::loadFromPath(path);
+    const QDir runtime(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+    QCOMPARE(settings.buzzAsrPython, runtime.filePath(QStringLiteral("speak-to-computer/buzzasr/.venv/bin/python")));
+    QCOMPARE(settings.buzzAsrScript, runtime.filePath(QStringLiteral("speak-to-computer/buzzasr/buzzasr_transcribe.py")));
+}
+
+void CoreBehaviorTest::buzzAsrShouldPreserveUnicodePathsWithoutUnsupportedPrompts()
+{
+    QTemporaryDir dir;
+    const QByteArray previousPath = qgetenv("PATH");
+    const QByteArray previousRuntime = qgetenv("XDG_RUNTIME_DIR");
+    const auto restoreEnvironment = qScopeGuard([&]() {
+        qputenv("PATH", previousPath);
+        qputenv("XDG_RUNTIME_DIR", previousRuntime);
+    });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("pgrep"), "#!/bin/sh\nexit 1\n").isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + previousPath);
+    qputenv("XDG_RUNTIME_DIR", dir.path().toUtf8());
+    AppSettings settings;
+    settings.buzzAsrPython = QStringLiteral("/usr/bin/python3");
+    settings.dictionaryPath = createFile(&dir, QStringLiteral("dictionary.txt"), "# names\nTaskBot\nPostgreSQL\n");
+    settings.buzzAsrScript = createFile(&dir, QStringLiteral("fake daemon.py"), R"PY(
+import json, os, time
+with open(os.environ["INBOX"], "a+") as inbox:
+    inbox.seek(0, 2)
+    print(json.dumps({"ready": True}), flush=True)
+    while True:
+        line = inbox.readline()
+        if not line:
+            time.sleep(0.01)
+            continue
+        request = json.loads(line)
+        assert set(request) == {"wav_path"}
+        print(json.dumps({"text": "Zażółć\n" + request["wav_path"]}), flush=True)
+)PY");
+    BuzzAsrRunner runner;
+    QSignalSpy ready(&runner, &BuzzAsrRunner::transcriptionReady);
+    QSignalSpy failed(&runner, &BuzzAsrRunner::failed);
+    runner.transcribe(QStringLiteral("/audio/zażółć test.wav"), settings);
+    QTRY_COMPARE_WITH_TIMEOUT(ready.count(), 1, 5000);
+    QCOMPARE(failed.count(), 0);
+    QCOMPARE(ready.at(0).at(0).toString(), QStringLiteral("Zażółć /audio/zażółć test.wav"));
+}
+
+void CoreBehaviorTest::buzzAsrShouldReportStartupErrorBeforeProcessExit()
+{
+    QTemporaryDir dir;
+    const QByteArray previousPath = qgetenv("PATH");
+    const QByteArray previousRuntime = qgetenv("XDG_RUNTIME_DIR");
+    const auto restoreEnvironment = qScopeGuard([&]() {
+        qputenv("PATH", previousPath);
+        qputenv("XDG_RUNTIME_DIR", previousRuntime);
+    });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("pgrep"), "#!/bin/sh\nexit 1\n").isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + previousPath);
+    qputenv("XDG_RUNTIME_DIR", dir.path().toUtf8());
+    AppSettings settings;
+    settings.buzzAsrPython = QStringLiteral("/usr/bin/python3");
+    settings.buzzAsrScript = createFile(&dir, QStringLiteral("failed daemon.py"),
+            "import json\nprint(json.dumps({'error': 'CUDA out of memory'}), flush=True)\nraise SystemExit(1)\n");
+    BuzzAsrRunner runner;
+    QSignalSpy failed(&runner, &BuzzAsrRunner::failed);
+    runner.transcribe(QStringLiteral("/audio/test.wav"), settings);
+    QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 5000);
+    QVERIFY(failed.at(0).at(0).toString().contains(QStringLiteral("CUDA out of memory")));
+}
+
+void CoreBehaviorTest::clipboardCopyShouldNotSendKeystrokes()
+{
+    QTemporaryDir dir;
+    const QByteArray previousPath = qgetenv("PATH");
+    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("xclip"),
+            "#!/bin/sh\ncat > \"$(dirname \"$0\")/copied.txt\"\n").isEmpty());
+    QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
+            "#!/bin/sh\ntouch \"$(dirname \"$0\")/keystrokes\"\n").isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + previousPath);
+    ClipboardPaster paster;
+    QString errorMessage;
+    QVERIFY2(paster.copy(QStringLiteral("Zażółć gęślą jaźń"), &errorMessage), qPrintable(errorMessage));
+    QFile copied(dir.filePath(QStringLiteral("copied.txt")));
+    QVERIFY(copied.open(QIODevice::ReadOnly));
+    QCOMPARE(QString::fromUtf8(copied.readAll()), QStringLiteral("Zażółć gęślą jaźń"));
+    QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("keystrokes"))));
+}
+
+void CoreBehaviorTest::clipboardClassicPasteShouldUseCtrlVWithoutXclip()
+{
+    QTemporaryDir dir;
+    const QByteArray previousPath = qgetenv("PATH");
+    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$*\" > \"$(dirname \"$0\")/xdotool-args\"\n")
+                    .isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + previousPath);
+
+    ClipboardPaster paster;
+    QString errorMessage;
+    QVERIFY2(paster.paste(0, QStringLiteral("old behavior"), &errorMessage, false,
+                          ClipboardPaster::PasteBehavior::Classic),
+            qPrintable(errorMessage));
+
+    QFile args(dir.filePath(QStringLiteral("xdotool-args")));
+    QVERIFY(args.open(QIODevice::ReadOnly));
+    const QString command = QString::fromUtf8(args.readAll());
+    QVERIFY(command.contains(QStringLiteral("ctrl+v")));
+}
+
+void CoreBehaviorTest::clipboardClassicPasteShouldServeSelectionBeforeEnter()
+{
+    if (QGuiApplication::platformName() != QStringLiteral("xcb")) {
+        QSKIP("Requires X11 clipboard");
+    }
+    if (QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty()) {
+        QSKIP("Requires xclip");
+    }
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QByteArray previousPath = qgetenv("PATH");
+    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
+            "#!/bin/sh\n"
+            "xclip -selection clipboard -o > \"$(dirname \"$0\")/received\" 2>/dev/null &\n"
+            "sleep 0.15\n"
+            "test -s \"$(dirname \"$0\")/received\"\n").isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + previousPath);
+
+    ClipboardPaster paster;
+    QString errorMessage;
+    QVERIFY2(paster.paste(0, QStringLiteral("Przykładowy tekst"), &errorMessage, true,
+                          ClipboardPaster::PasteBehavior::Classic), qPrintable(errorMessage));
+    QFile received(dir.filePath(QStringLiteral("received")));
+    QVERIFY(received.open(QIODevice::ReadOnly));
+    QCOMPARE(QString::fromUtf8(received.readAll()), QStringLiteral("Przykładowy tekst"));
+}
+
+void CoreBehaviorTest::herdrGpuiShouldPasteWithCtrlShiftV()
+{
+    // Herdr GPUI pastes on ctrl+shift+v. ctrl+v is delivered to the pane as a raw key.
+    const QString herdrClass = QStringLiteral(
+            "WM_CLASS(STRING) = \"so.pen.herdr-gpui\", \"so.pen.herdr-gpui\"");
+    QCOMPARE(ClipboardPaster::pasteKeystrokeForWindowClass(herdrClass), QStringLiteral("ctrl+shift+v"));
+    QCOMPARE(ClipboardPaster::pasteKeystrokeForWindowClass(QStringLiteral("firefox")),
+            QStringLiteral("ctrl+v"));
+}
+
+void CoreBehaviorTest::focusPasteShouldReadActiveWindowClass()
+{
+    // Window 0 is focus mode. The shortcut must follow the focused window,
+    // not fall back to ctrl+v before anyone looks at WM_CLASS.
+    QTemporaryDir dir;
+    const QByteArray previousPath = qgetenv("PATH");
+    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
+            "#!/bin/sh\n"
+            "if [ \"$1\" = getactivewindow ]; then echo 4242; exit 0; fi\n"
+            "exit 1\n")
+                    .isEmpty());
+    QVERIFY(!createExecutable(&dir, QStringLiteral("xprop"),
+            "#!/bin/sh\n"
+            "echo 'WM_CLASS(STRING) = \"so.pen.herdr-gpui\", \"so.pen.herdr-gpui\"'\n")
+                    .isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + previousPath);
+
+    QCOMPARE(ClipboardPaster::pasteKeystrokeFor(0), QStringLiteral("ctrl+shift+v"));
+}
+
+void CoreBehaviorTest::emptyResultAlertShouldHideItself()
+{
+    // No transcript is not a fault the user has to dismiss. The window closes itself.
+    OverlayWidget overlay;
+    overlay.showError(QStringLiteral("Whisper did not return any text."),
+            QStringLiteral("Dictation alert"), 40);
+    QVERIFY(overlay.isVisible());
+    QTRY_VERIFY_WITH_TIMEOUT(!overlay.isVisible(), 1000);
+}
+
+void CoreBehaviorTest::iconShouldRenderAtTraySize()
+{
+    const QIcon icon(QStringLiteral(":/icons/speak-to-computer.svg"));
+    QVERIFY(!icon.pixmap(16, 16).isNull());
+}
+
+void CoreBehaviorTest::vadEndpointShouldAllowThinkingPause()
+{
+    VadEndpointDetector detector(std::make_unique<FakeVadFrameClassifier>());
+    QString errorMessage;
+    QVERIFY(detector.reset({2, 1500, 100}, &errorMessage));
+    for (int frameIndex = 0; frameIndex < 5; ++frameIndex) {
+        QVERIFY(detector.consumePcmChunk(vadFrame(true), &errorMessage));
+    }
+    for (int frameIndex = 0; frameIndex < 70; ++frameIndex) {
+        QVERIFY(detector.consumePcmChunk(vadFrame(false), &errorMessage));
+    }
+    QVERIFY(!detector.shouldAutoStop());
+    for (int frameIndex = 0; frameIndex < 5; ++frameIndex) {
+        QVERIFY(detector.consumePcmChunk(vadFrame(false), &errorMessage));
+    }
+    QVERIFY(detector.shouldAutoStop());
 }
 
 void CoreBehaviorTest::settingsShouldResolveModelLabel()
@@ -231,6 +768,7 @@ void CoreBehaviorTest::settingsShouldSaveAndReloadAllEditableFields()
     expected.wakeWordThreshold = 0.65;
     expected.wakeWordSidecarExecutable = QStringLiteral("/venv/bin/python");
     expected.wakeWordSidecarScript = QStringLiteral("/app/openwakeword_sidecar.py");
+    expected.pasteTarget = QString::fromUtf8(AppSettings::kPasteTargetFocus);
     expected.vadAutostopEnabled = true;
     expected.vadAggressiveness = 3;
     expected.vadEndSilenceMs = 700;
@@ -248,6 +786,7 @@ void CoreBehaviorTest::settingsShouldSaveAndReloadAllEditableFields()
     QCOMPARE(actual.hotkeyTranslateEn, expected.hotkeyTranslateEn);
     QCOMPARE(actual.audioBackend, expected.audioBackend);
     QCOMPARE(actual.language, expected.language);
+    QCOMPARE(actual.pasteTarget, expected.pasteTarget);
     QCOMPARE(actual.whisperCli, expected.whisperCli);
     QCOMPARE(actual.model, expected.model);
     QCOMPARE(actual.activationSound, expected.activationSound);
@@ -847,6 +1386,49 @@ void CoreBehaviorTest::meetingAudioFilterShouldPreserveSeparateChannels()
     QVERIFY(left != right);
 }
 
+void CoreBehaviorTest::settingsShouldDefaultPasteTargetToPin()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+    QCOMPARE(settings.pasteTarget, QString::fromUtf8(AppSettings::kPasteTargetPin));
+    QVERIFY(settings.isPinPasteTarget());
+    QVERIFY(!settings.isFocusPasteTarget());
+    QCOMPARE(AppSettings::pasteTargetLabel(QStringLiteral("focus")), QStringLiteral("Focus"));
+    QCOMPARE(AppSettings::normalizePasteTarget(QStringLiteral("FOCUS")),
+            QString::fromUtf8(AppSettings::kPasteTargetFocus));
+}
+
+void CoreBehaviorTest::settingsShouldDefaultToClassicPasteBehavior()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    AppSettings settings = AppSettings::loadFromPath(path);
+    QCOMPARE(settings.pasteBehavior, QString::fromUtf8(AppSettings::kPasteBehaviorClassic));
+    QVERIFY(settings.isClassicPasteBehavior());
+    QVERIFY(!settings.isTerminalCompatiblePasteBehavior());
+
+    settings.pasteBehavior = QString::fromUtf8(AppSettings::kPasteBehaviorTerminalCompatible);
+    QString errorMessage;
+    QVERIFY2(AppSettings::save(settings, &errorMessage), qPrintable(errorMessage));
+    const AppSettings loaded = AppSettings::loadFromPath(path);
+    QVERIFY(loaded.isTerminalCompatiblePasteBehavior());
+    QVERIFY(!loaded.isClassicPasteBehavior());
+}
+
+void CoreBehaviorTest::transcriptShouldStripTrailingSendKeyword()
+{
+    QString transcript = QStringLiteral("uruchom test GO!");
+    QVERIFY(AppSettings::stripTrailingSendKeyword(&transcript, QStringLiteral("go")));
+    QCOMPARE(transcript, QStringLiteral("uruchom test"));
+
+    transcript = QStringLiteral("nie zmieniaj together");
+    QVERIFY(!AppSettings::stripTrailingSendKeyword(&transcript, QStringLiteral("go")));
+    QCOMPARE(transcript, QStringLiteral("nie zmieniaj together"));
+}
+
 void CoreBehaviorTest::settingsShouldLoadSeparateHotkeyDefaults()
 {
     QTemporaryDir dir;
@@ -1094,7 +1676,18 @@ void CoreBehaviorTest::settingsShouldMigrateAppDataWakeWordRuntimeDefaults()
     QVERIFY(!settings.wakeWordSidecarScript.contains(QStringLiteral("/speak-to-computer/speak-to-computer/python")));
 }
 
-void CoreBehaviorTest::overlayShouldRequestCloseOnEscape()
+void CoreBehaviorTest::overlayShouldRequestCloseOnShiftEscape()
+{
+    OverlayWidget overlay;
+    QSignalSpy closeSpy(&overlay, &OverlayWidget::closeRequested);
+
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_Escape, Qt::ShiftModifier);
+    QVERIFY(QCoreApplication::sendEvent(&overlay, &event));
+
+    QCOMPARE(closeSpy.count(), 1);
+}
+
+void CoreBehaviorTest::overlayShouldIgnoreBareEscape()
 {
     OverlayWidget overlay;
     QSignalSpy closeSpy(&overlay, &OverlayWidget::closeRequested);
@@ -1102,7 +1695,7 @@ void CoreBehaviorTest::overlayShouldRequestCloseOnEscape()
     QKeyEvent event(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QVERIFY(QCoreApplication::sendEvent(&overlay, &event));
 
-    QCOMPARE(closeSpy.count(), 1);
+    QCOMPARE(closeSpy.count(), 0);
 }
 
 void CoreBehaviorTest::cleanupShouldTrimAndJoinTranscriptLines()
