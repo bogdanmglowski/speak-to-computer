@@ -142,6 +142,11 @@ including a result whose automatic paste failed. It does not paste or press Ente
 There is no additional on-disk history for this feature; its buffer is cleared on exit.
 BuzzASR's temporary IPC files and diagnostic stderr live under `$XDG_RUNTIME_DIR`.
 
+Preferences → **Sposób wklejania** offers two choices. **Klasyczne wklejanie**
+keeps the original Qt clipboard and `Ctrl+V` behavior and is the default.
+**Wklejanie kompatybilne z terminalami** uses `xclip` and selects `Ctrl+V` or
+`Ctrl+Shift+V` based on the target application's window class.
+
 **Tryb mini** is available directly in the tray menu and in Preferences → Overlay.
 It persists as `mini_overlay_enabled=true`, defaulting to false. During recording
 it shows only a stationary voice visualizer, elapsed time, and GPU memory on a

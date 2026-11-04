@@ -4,6 +4,11 @@ hotkey_dictate=Super+Space
 hotkey_translate_en=Super+slash
 push_to_talk_button=11
 push_to_talk_send_enter=false
+# paste_behavior=classic keeps the original Qt clipboard + Ctrl+V behavior.
+# Use terminal_compatible for xclip and automatic terminal shortcuts.
+paste_behavior=classic
+send_keyword_enabled=true
+send_keyword=go
 language=pl
 threads=12
 model=/media/extraHDD/whisper-models/ggml-small.bin
