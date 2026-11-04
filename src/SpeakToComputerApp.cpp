@@ -188,6 +188,9 @@ SpeakToComputerApp::SpeakToComputerApp(const AppSettings &settings, QObject *par
     refreshSendKeywordUi();
     refreshPasteTargetUi();
     overlay_.setMiniModeEnabled(settings_.miniOverlayEnabled);
+    realtime_.setPasteBehavior(settings_.isTerminalCompatiblePasteBehavior()
+            ? ClipboardPaster::PasteBehavior::TerminalCompatible
+            : ClipboardPaster::PasteBehavior::Classic);
     setOverlayRuntimeControlsEnabled(true);
     refreshVadRuntimeStatus();
     updateOverlayVadControl();
@@ -675,10 +678,21 @@ void SpeakToComputerApp::handleTranscriptionReady(const QString &text)
         return;
     }
 
+    QString textToPaste = text;
+    bool sendEnter = sendEnterAfterTranscription_;
+    if (settings_.sendKeywordEnabled
+            && AppSettings::stripTrailingSendKeyword(&textToPaste, settings_.sendKeyword)) {
+        sendEnter = true;
+        qInfo().noquote() << "batch send keyword triggered Enter:" << settings_.sendKeyword;
+    }
+
     qInfo().noquote() << "text:" << text;
-    lastTranscription_ = text;
+    lastTranscription_ = textToPaste;
     trayCopyLastTextAction_->setEnabled(true);
-    if (!paster_.paste(effectivePasteWindow(), text, &errorMessage, sendEnterAfterTranscription_)) {
+    const auto pasteBehavior = settings_.isTerminalCompatiblePasteBehavior()
+            ? ClipboardPaster::PasteBehavior::TerminalCompatible
+            : ClipboardPaster::PasteBehavior::Classic;
+    if (!paster_.paste(effectivePasteWindow(), textToPaste, &errorMessage, sendEnter, pasteBehavior)) {
         showErrorAndReturnIdle(errorMessage);
         return;
     }
@@ -1243,6 +1257,13 @@ bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const
         }
         return false;
     }
+    if (settings_.isTerminalCompatiblePasteBehavior()
+            && QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("xclip was not found in PATH (required for terminal-compatible paste).");
+        }
+        return false;
+    }
 
     if (settings_.isBuzzAsrEngine()) {
         if (!QFileInfo::exists(settings_.buzzAsrPython) || !QFileInfo(settings_.buzzAsrPython).isExecutable()) {
@@ -1279,7 +1300,8 @@ bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const
     }
 
     if (settings_.isRealtimeEngine()) {
-        if (QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty()) {
+        if (settings_.isTerminalCompatiblePasteBehavior()
+                && QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty()) {
             if (errorMessage != nullptr) {
                 *errorMessage = QStringLiteral("xclip was not found in PATH (required for Realtime paste).");
             }
@@ -1475,6 +1497,9 @@ bool SpeakToComputerApp::applySettings(const AppSettings &newSettings, QString *
     refreshSendKeywordUi();
     refreshPasteTargetUi();
     realtime_.setPasteTarget(settings_.pasteTarget);
+    realtime_.setPasteBehavior(settings_.isTerminalCompatiblePasteBehavior()
+            ? ClipboardPaster::PasteBehavior::TerminalCompatible
+            : ClipboardPaster::PasteBehavior::Classic);
     refreshVadRuntimeStatus();
     updateOverlayVadControl();
 

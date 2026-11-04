@@ -3,6 +3,8 @@
 #include "ClipboardPaster.h"
 
 #include <QAbstractSocket>
+#include <QApplication>
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
@@ -481,6 +483,9 @@ bool RealtimeSidecar::startSession(quint64 targetWindow, const AppSettings &sett
 
     targetWindow_ = targetWindow;
     pinPasteTarget_ = settings.isPinPasteTarget();
+    pasteBehavior_ = settings.isTerminalCompatiblePasteBehavior()
+            ? ClipboardPaster::PasteBehavior::TerminalCompatible
+            : ClipboardPaster::PasteBehavior::Classic;
     lastEmittedChar_ = QChar();
     pasteTail_.clear();
     sendKeywordEnabled_ = settings.sendKeywordEnabled;
@@ -581,6 +586,11 @@ void RealtimeSidecar::setPasteTarget(const QString &pasteTarget)
 {
     pinPasteTarget_ = AppSettings::normalizePasteTarget(pasteTarget)
             == QString::fromUtf8(AppSettings::kPasteTargetPin);
+}
+
+void RealtimeSidecar::setPasteBehavior(ClipboardPaster::PasteBehavior behavior)
+{
+    pasteBehavior_ = behavior;
 }
 
 void RealtimeSidecar::setTargetWindow(quint64 targetWindow)
@@ -747,9 +757,10 @@ bool RealtimeSidecar::pasteDelta(const QString &text, QString *errorMessage)
     if (text.isEmpty()) {
         return true;
     }
+    const bool classic = pasteBehavior_ == ClipboardPaster::PasteBehavior::Classic;
     const QString xclip = QStandardPaths::findExecutable(QStringLiteral("xclip"));
     const QString xdotool = QStandardPaths::findExecutable(QStringLiteral("xdotool"));
-    if (xclip.isEmpty()) {
+    if (!classic && xclip.isEmpty()) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("xclip not found (needed for realtime paste).");
         }
@@ -762,22 +773,27 @@ bool RealtimeSidecar::pasteDelta(const QString &text, QString *errorMessage)
         return false;
     }
 
-    QProcess clip;
-    clip.start(xclip, {QStringLiteral("-selection"), QStringLiteral("clipboard")});
-    if (!clip.waitForStarted(1000)) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("Could not start xclip.");
+    if (classic) {
+        QApplication::clipboard()->setText(text, QClipboard::Clipboard);
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 50);
+    } else {
+        QProcess clip;
+        clip.start(xclip, {QStringLiteral("-selection"), QStringLiteral("clipboard")});
+        if (!clip.waitForStarted(1000)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("Could not start xclip.");
+            }
+            return false;
         }
-        return false;
-    }
-    clip.write(text.toUtf8());
-    clip.closeWriteChannel();
-    if (!clip.waitForFinished(1500)) {
-        clip.kill();
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("xclip timed out.");
+        clip.write(text.toUtf8());
+        clip.closeWriteChannel();
+        if (!clip.waitForFinished(1500)) {
+            clip.kill();
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("xclip timed out.");
+            }
+            return false;
         }
-        return false;
     }
 
     QStringList args;
@@ -788,7 +804,7 @@ bool RealtimeSidecar::pasteDelta(const QString &text, QString *errorMessage)
     // Focus mode does not activate the start window. The key lands in the
     // window that has focus now, so the shortcut must match that window.
     const quint64 keystrokeWindow = pinWindow ? targetWindow_ : 0;
-    const QString keystroke = ClipboardPaster::pasteKeystrokeFor(keystrokeWindow);
+    const QString keystroke = classic ? QStringLiteral("ctrl+v") : ClipboardPaster::pasteKeystrokeFor(keystrokeWindow);
     qInfo().noquote() << "realtime paste window" << keystrokeWindow << "key" << keystroke;
     args << QStringLiteral("key") << QStringLiteral("--clearmodifiers") << keystroke;
 

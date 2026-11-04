@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AppSettings.h"
+#include "ClipboardPaster.h"
 
 #include <QObject>
 #include <QProcess>
@@ -27,6 +28,7 @@ public:
     void stopSession();
     void setSendKeywordEnabled(bool enabled);
     void setPasteTarget(const QString &pasteTarget);
+    void setPasteBehavior(ClipboardPaster::PasteBehavior behavior);
     void setTargetWindow(quint64 targetWindow);
 
 signals:
@@ -78,6 +80,7 @@ private:
     quint64 targetWindow_ = 0;
     // When true: windowactivate pinned target before paste/keys. When false: current focus.
     bool pinPasteTarget_ = true;
+    ClipboardPaster::PasteBehavior pasteBehavior_ = ClipboardPaster::PasteBehavior::Classic;
     QChar lastEmittedChar_;
     QString pasteTail_;
     QString transcription_;
