@@ -5,6 +5,7 @@
 
 #include <QDialog>
 #include <QElapsedTimer>
+#include <QHash>
 #include <QProcess>
 
 class QComboBox;
@@ -37,6 +38,7 @@ private:
     void showVersion();
     void updateStatus();
     QByteArray transcriptHash() const;
+    QString currentOllamaUrl() const;
 
     MeetingEntry meeting_;
     AppSettings settings_;
@@ -53,8 +55,10 @@ private:
     QString reasoningEffort_;
     QString activeBackend_;
     QString modelsBackend_;
-    QString localModel_;
-    QString localOllamaModel_;
+    QString activeOllamaUrl_;
+    QString modelsEndpoint_;
+    QStringList ollamaUrls_;
+    QHash<QString, QString> ollamaModels_;
     QString opencodeModel_;
     QString codexModel_;
     bool canceled_ = false;

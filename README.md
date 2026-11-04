@@ -412,8 +412,8 @@ once enough progress is available, an approximate remaining time for that stage.
 
 #### Meeting analysis
 
-Select a transcribed recording and click **Analyze transcript**. Choose Ollama
-(the default) or Codex CLI, select a model and click **Analyze**. The model
+Select a transcribed recording and click **Analyze transcript**. Choose an
+Ollama server, Codex CLI, or OpenCode CLI, select a model and click **Analyze**. The model
 list can be refreshed in this window; the Codex list comes from its local model
 cache and may be outdated. A model ID can also be entered manually. The Polish note includes a
 brief overview, substantive topics, agreed tasks, decisions, and open questions
@@ -424,23 +424,25 @@ references nor the model's output guarantee factual accuracy.
 For Codex CLI, choose a **Reasoning effort** in the analysis window. `Default` uses
 Codex's built-in default; supported levels depend on the model. Codex runs
 non-interactively in a read-only sandbox, without loading user configuration or
-persisting its session; transcript content is passed via stdin. The configured
-Codex CLI must be signed in with ChatGPT. Requests are sent to OpenAI and use the
+persisting its session; transcript content is passed via stdin. Codex CLI must
+be installed and signed in with ChatGPT. Requests are sent to OpenAI and use the
 account's Codex allowance. Longer transcripts may require multiple requests.
 
-Configure the Ollama address and Codex CLI path under **Preferences →
-Meeting analysis**. Install and start Ollama separately, and download a model
-such as `ollama pull qwen3:8b` on that server. The address can point to a local
-or network server, for example `http://karaczan:11434` or an HTTPS endpoint.
-Analysis sends the transcript to the configured server. Models advertised by
-Ollama as hosted in its cloud remain excluded. Previously saved OpenAI analyses
-remain available. The former `openai-api-key` file is not used or deleted by the
-app; remove it manually if it is no longer needed.
+Configure one or more Ollama addresses under **Preferences → Meeting analysis**.
+Select an address and use **Check Ollama connection** to test it; the selected
+server's model list can then be refreshed in the analysis window. Install and
+start Ollama separately, and download a model such as `ollama pull qwen3:8b` on
+each server. Addresses can point to local or network servers, for example
+`http://127.0.0.1:11434`, `http://karaczan:11434`, or an HTTPS endpoint.
+Analysis sends the transcript to the selected server, and remembers the model
+separately for each address. Models advertised by Ollama as hosted in its cloud
+remain excluded. Previously saved OpenAI analyses remain available. The former
+`openai-api-key` file is not used or deleted by the app; remove it manually if
+it is no longer needed.
 
-Choose **Ollama local** to use the Ollama server on this computer at
-`http://127.0.0.1:11434`, independently of the configured server. Each Ollama
-mode remembers its own model. Start the local Ollama service and pull a model
-before refreshing the model list.
+Codex CLI and OpenCode CLI are always available as analysis modes when their
+programs are installed and logged in on the environment; their executable paths
+are not configured in the app.
 
 **OpenCode Go** uses OpenCode CLI 2.2.3 or newer and its connected OpenCode Go
 account. Connect it in OpenCode first, then refresh the models in the analysis

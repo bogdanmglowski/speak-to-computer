@@ -16,6 +16,7 @@
 #include <QFile>
 #include <QKeyEvent>
 #include <QInputDialog>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -42,9 +43,12 @@ private slots:
     void settingsShouldReturnOnlyExistingModelPaths();
     void settingsShouldSaveModelPath();
     void settingsShouldSaveAndReloadAllEditableFields();
+    void settingsShouldMigrateLegacyOllamaAddress();
     void huggingFaceSetupShouldInstallAndSaveSettings();
     void ollamaPreferencesShouldAcceptNetworkServer();
+    void ollamaPreferencesShouldManageMultipleServers();
     void meetingStorageShouldKeepEntriesInConfiguredDirectory();
+    void meetingTableShouldWrapStatusTextWithoutElision();
     void meetingRecordingAndTranscriptionShouldComplete();
     void meetingSpeakerTranscriptionShouldSaveAndRename();
     void meetingAnalysisShouldSaveVersionsAndDetectChanges();
@@ -263,6 +267,20 @@ void CoreBehaviorTest::settingsShouldSaveAndReloadAllEditableFields()
     QCOMPARE(actual.meetingsDirectory, expected.meetingsDirectory);
 }
 
+void CoreBehaviorTest::settingsShouldMigrateLegacyOllamaAddress()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString settingsPath = dir.filePath(QStringLiteral("settings.ini"));
+    QSettings legacy(settingsPath, QSettings::IniFormat);
+    legacy.setValue(QStringLiteral("analysis_ollama_url"), QStringLiteral("http://karaczan:11434"));
+    legacy.sync();
+
+    const AppSettings settings = AppSettings::loadFromPath(settingsPath);
+    QCOMPARE(settings.analysisOllamaUrls,
+            QStringList({QStringLiteral("http://karaczan:11434"), QStringLiteral("http://127.0.0.1:11434")}));
+}
+
 void CoreBehaviorTest::meetingStorageShouldKeepEntriesInConfiguredDirectory()
 {
     QTemporaryDir dir;
@@ -377,13 +395,44 @@ void CoreBehaviorTest::ollamaPreferencesShouldAcceptNetworkServer()
     QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(QStringLiteral("Connected. Models: qwen3:8b")), 5000);
     QString error;
     QVERIFY2(AppSettings::save(dialog.editedSettings(), &error), qPrintable(error));
-    QCOMPARE(AppSettings::loadFromPath(settings.settingsPath).analysisOllamaUrl, QStringLiteral("http://karaczan:11434"));
+    const QStringList savedUrls{QStringLiteral("http://karaczan:11434")};
+    QCOMPARE(AppSettings::loadFromPath(settings.settingsPath).analysisOllamaUrls, savedUrls);
     address->setText(QStringLiteral("https://karaczan:11434"));
     check->click();
     QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(QStringLiteral("Connected. Models: qwen3:8b")), 5000);
     address->setText(QStringLiteral("http://karaczan/path"));
     check->click();
     QVERIFY(status->text().contains(QStringLiteral("without a path")));
+}
+
+void CoreBehaviorTest::ollamaPreferencesShouldManageMultipleServers()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    AppSettings settings = AppSettings::loadFromPath(dir.filePath(QStringLiteral("settings.ini")));
+    settings.analysisOllamaUrls = {QStringLiteral("http://127.0.0.1:11434"), QStringLiteral("http://karaczan:11434")};
+    PreferencesDialog dialog(settings);
+    auto *servers = dialog.findChild<QListWidget *>(QStringLiteral("analysisOllamaServers"));
+    auto *address = dialog.findChild<QLineEdit *>(QStringLiteral("analysisOllamaUrl"));
+    auto *add = dialog.findChild<QPushButton *>(QStringLiteral("analysisAddOllama"));
+    auto *remove = dialog.findChild<QPushButton *>(QStringLiteral("analysisRemoveOllama"));
+    QVERIFY(servers && address && add && remove);
+    QCOMPARE(servers->count(), 2);
+    QVERIFY(!dialog.findChild<QLineEdit *>(QStringLiteral("analysisCodexCli")));
+
+    address->setText(QStringLiteral("https://third-server:11434"));
+    add->click();
+    QCOMPARE(servers->count(), 3);
+    QCOMPARE(servers->item(2)->text(), QStringLiteral("https://third-server:11434"));
+    servers->setCurrentRow(1);
+    remove->click();
+    QCOMPARE(servers->count(), 2);
+    const QStringList expectedUrls{QStringLiteral("http://127.0.0.1:11434"), QStringLiteral("https://third-server:11434")};
+    QCOMPARE(dialog.editedSettings().analysisOllamaUrls, expectedUrls);
+    QString error;
+    QVERIFY2(AppSettings::save(dialog.editedSettings(), &error), qPrintable(error));
+    QCOMPARE(AppSettings::loadFromPath(settings.settingsPath).analysisOllamaUrls, expectedUrls);
 }
 
 void CoreBehaviorTest::meetingAnalysisShouldSaveVersionsAndDetectChanges()
@@ -404,9 +453,9 @@ void CoreBehaviorTest::meetingAnalysisShouldSaveVersionsAndDetectChanges()
             "#!/bin/sh\n"
             "[ -z \"$OPENAI_API_KEY\" ] && [ -z \"$CODEX_API_KEY\" ] || exit 8\n"
             "if [ \"$2\" = --list-models ]; then\n"
-            "  case \" $* \" in *' --backend codex '*) printf '%s\\n' '{\"models\":[\"gpt-6-luna\",\"gpt-custom\"]}' ;; *' --backend opencode '*) printf '%s\\n' '{\"models\":[\"opencode-go/test\"]}' ;; *' --backend ollama_local '*) printf '%s\\n' '{\"models\":[\"local-only\"]}' ;; *) printf '%s\\n' '{\"models\":[\"qwen3:8b\",\"local-custom\"]}' ;; esac\n"
+            "  case \" $* \" in *' --backend codex '*) printf '%s\\n' '{\"models\":[\"gpt-6-luna\",\"gpt-custom\"]}' ;; *' --backend opencode '*) printf '%s\\n' '{\"models\":[\"opencode-go/test\"]}' ;; *' --endpoint http://127.0.0.1:11434 '*) printf '%s\\n' '{\"models\":[\"local-only\"]}' ;; *) printf '%s\\n' '{\"models\":[\"qwen3:8b\",\"local-custom\"]}' ;; esac\n"
             "  exit 0\nfi\n"
-            "case \" $* \" in *' --backend codex '*) case \" $* \" in *' --model gpt-custom '*) ;; *) exit 11 ;; esac ;; *) case \" $* \" in *' --model local-custom '*) ;; *) exit 12 ;; esac ;; esac\n"
+            "case \" $* \" in *' --backend codex '*) case \" $* \" in *' --model gpt-custom '*) ;; *) exit 11 ;; esac ;; *' --endpoint http://127.0.0.1:11434 '*' --model local-only '*) ;; *) case \" $* \" in *' --model local-custom '*) ;; *) exit 12 ;; esac ;; esac\n"
             "case \" $* \" in *' --backend codex '*) case \" $* \" in *' --reasoning-effort xhigh '*) ;; *) exit 13 ;; esac ;; *) case \" $* \" in *' --reasoning-effort '*) exit 14 ;; esac ;; esac\n"
             "IFS= read -r first\n[ \"$first\" = '[00:00:01] Ja: Test.' ] || exit 10\ncat > /dev/null\n"
             "if [ \"$TEST_ANALYSIS_HANG\" = 1 ]; then exec sleep 30; fi\n"
@@ -418,7 +467,7 @@ void CoreBehaviorTest::meetingAnalysisShouldSaveVersionsAndDetectChanges()
     qputenv("OPENAI_API_KEY", "should-not-reach-local");
     AppSettings settings;
     settings.meetingsDirectory = dir.filePath(QStringLiteral("meetings"));
-    settings.analysisOllamaUrl = QStringLiteral("http://karaczan:11434");
+    settings.analysisOllamaUrls = {QStringLiteral("http://karaczan:11434"), QStringLiteral("http://127.0.0.1:11434")};
     settings.settingsPath = dir.filePath(QStringLiteral("settings.ini"));
     MeetingEntry entry; QString error;
     QVERIFY(MeetingStore::create(settings.meetingsDirectory, &entry, &error));
@@ -443,6 +492,8 @@ void CoreBehaviorTest::meetingAnalysisShouldSaveVersionsAndDetectChanges()
     QSignalSpy busySpy(&dialog, &MeetingAnalysisDialog::busyChanged);
     start->click();
     QTRY_COMPARE_WITH_TIMEOUT(versions->count(), 1, 5000);
+    QVERIFY(versions->item(0)->text().contains(QLatin1Char('\n')));
+    QVERIFY(versions->item(0)->sizeHint().height() >= versions->fontMetrics().lineSpacing() * 2);
     QVERIFY(preview->toPlainText().contains(QStringLiteral("Wniosek (00:00:01)")));
     QVERIFY(versions->currentItem()->text().contains(QStringLiteral("Duration: ")));
     QFile savedAnalysis(versions->currentItem()->data(Qt::UserRole).toString());
@@ -458,11 +509,11 @@ void CoreBehaviorTest::meetingAnalysisShouldSaveVersionsAndDetectChanges()
     QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(QStringLiteral("synthetic error")), 5000);
     QCOMPARE(versions->count(), 2);
     qunsetenv("TEST_ANALYSIS_FAIL");
-    backend->setCurrentIndex(backend->findData(QStringLiteral("ollama_local")));
+    backend->setCurrentIndex(1);
     QTRY_VERIFY_WITH_TIMEOUT(model->findText(QStringLiteral("local-only")) >= 0, 5000);
     backend->setCurrentIndex(backend->findData(QStringLiteral("opencode")));
     QTRY_VERIFY_WITH_TIMEOUT(model->findText(QStringLiteral("opencode-go/test")) >= 0, 5000);
-    backend->setCurrentIndex(backend->findData(QStringLiteral("ollama")));
+    backend->setCurrentIndex(0);
     QTRY_COMPARE_WITH_TIMEOUT(model->currentText(), QStringLiteral("local-custom"), 5000);
     backend->setCurrentIndex(backend->findData(QStringLiteral("codex")));
     QTRY_VERIFY_WITH_TIMEOUT(model->findText(QStringLiteral("gpt-custom")) >= 0, 5000);
@@ -504,15 +555,13 @@ void CoreBehaviorTest::meetingAnalysisShouldSaveVersionsAndDetectChanges()
     QVERIFY(!preferences.findChild<QLineEdit *>(QStringLiteral("analysisOpenAiModel")));
     QVERIFY(!preferences.findChild<QLineEdit *>(QStringLiteral("analysisOllamaModel")));
     QVERIFY(!preferences.findChild<QLineEdit *>(QStringLiteral("analysisOpenAiKey")));
-    auto *codexPath = preferences.findChild<QLineEdit *>(QStringLiteral("analysisCodexCli"));
-    QVERIFY(codexPath);
-    codexPath->setText(QStringLiteral("/opt/codex"));
+    QVERIFY(!preferences.findChild<QLineEdit *>(QStringLiteral("analysisCodexCli")));
     settings = preferences.editedSettings();
     QFile key(dir.filePath(QStringLiteral("openai-api-key")));
     QVERIFY(key.open(QIODevice::WriteOnly)); key.write("legacy-key"); key.close();
     QVERIFY2(AppSettings::save(settings, &error), qPrintable(error));
     AppSettings loaded = AppSettings::loadFromPath(settings.settingsPath);
-    QCOMPARE(loaded.analysisCodexCli, QStringLiteral("/opt/codex"));
+    QVERIFY(!QSettings(settings.settingsPath, QSettings::IniFormat).contains(QStringLiteral("analysis_codex_cli")));
     QVERIFY(key.open(QIODevice::ReadOnly)); QCOMPARE(key.readAll(), QByteArray("legacy-key"));
 }
 
@@ -590,6 +639,32 @@ void CoreBehaviorTest::meetingSpeakerTranscriptionShouldSaveAndRename()
     QVERIFY(renamed.contains("Ania: Hi"));
     QVERIFY(renamed.contains("Ania: Again"));
     QVERIFY(renamed.contains("Ja: Hello"));
+}
+
+void CoreBehaviorTest::meetingTableShouldWrapStatusTextWithoutElision()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    MeetingEntry entry;
+    QString error;
+    QVERIFY(MeetingStore::create(dir.filePath(QStringLiteral("meetings")), &entry, &error));
+    entry.status = QStringLiteral("Transcription interrupted");
+    QVERIFY2(MeetingStore::save(entry, &error), qPrintable(error));
+
+    AppSettings settings;
+    settings.meetingsDirectory = dir.filePath(QStringLiteral("meetings"));
+    WhisperRunner runner;
+    MeetingDialog dialog(settings, &runner, []() { return true; });
+    auto *table = dialog.findChild<QTableWidget *>(QStringLiteral("meetingTable"));
+    QVERIFY(table);
+
+    QVERIFY(table->wordWrap());
+    QCOMPARE(table->textElideMode(), Qt::ElideNone);
+    QVERIFY(table->verticalHeader()->sectionResizeMode(0) == QHeaderView::ResizeToContents);
+    table->setColumnWidth(3, 90);
+    table->resizeRowsToContents();
+    QVERIFY(table->rowHeight(0) >= table->fontMetrics().lineSpacing() * 2);
 }
 
 void CoreBehaviorTest::meetingRecordingAndTranscriptionShouldComplete()

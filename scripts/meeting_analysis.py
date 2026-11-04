@@ -242,7 +242,7 @@ def codex_executable(configured):
             if found:
                 break
     if not found:
-        raise ValueError('Nie znaleziono Codex CLI. Zainstaluj go lub ustaw jego ścieżkę w Preferencjach.')
+        raise ValueError('Nie znaleziono Codex CLI. Zainstaluj go i udostępnij polecenie codex w PATH.')
     return found
 
 

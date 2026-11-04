@@ -177,6 +177,9 @@ MeetingDialog::MeetingDialog(const AppSettings &settings, WhisperRunner *whisper
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table_->setAlternatingRowColors(true);
+    table_->setWordWrap(true);
+    table_->setTextElideMode(Qt::ElideNone);
+    table_->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     table_->verticalHeader()->hide();
     recordsLayout->addWidget(table_);
 
@@ -532,6 +535,7 @@ void MeetingDialog::refresh()
         for (int c = 0; c < values.size(); ++c) table_->setItem(i, c, new QTableWidgetItem(values[c]));
         if (entry.directory == selected) table_->selectRow(i);
     }
+    table_->resizeRowsToContents();
     updateButtons();
     updateDetails();
 }

@@ -52,6 +52,12 @@ QJsonObject metadata(const QByteArray &data)
     if (end < 0) return {};
     return QJsonDocument::fromJson(data.mid(prefix.size(), end - prefix.size())).object();
 }
+
+QString ollamaModelKey(const QString &endpoint)
+{
+    return QStringLiteral("analysis_ollama_model_")
+            + QString::fromLatin1(QCryptographicHash::hash(endpoint.toUtf8(), QCryptographicHash::Sha1).toHex());
+}
 }
 
 MeetingAnalysisDialog::MeetingAnalysisDialog(const MeetingEntry &meeting, const AppSettings &settings, QWidget *parent)
@@ -64,8 +70,11 @@ MeetingAnalysisDialog::MeetingAnalysisDialog(const MeetingEntry &meeting, const 
     controls->addWidget(new QLabel(QStringLiteral("Analysis mode:"), this));
     backendCombo_ = new QComboBox(this);
     backendCombo_->setObjectName(QStringLiteral("analysisBackend"));
-    backendCombo_->addItem(QStringLiteral("Ollama karaczan"), QStringLiteral("ollama"));
-    backendCombo_->addItem(QStringLiteral("Ollama local"), QStringLiteral("ollama_local"));
+    ollamaUrls_ = settings_.analysisOllamaUrls;
+    ollamaUrls_.removeAll(QString());
+    if (ollamaUrls_.isEmpty()) ollamaUrls_ << QStringLiteral("http://127.0.0.1:11434");
+    for (const QString &url : ollamaUrls_)
+        backendCombo_->addItem(QStringLiteral("Ollama — %1").arg(url), QStringLiteral("ollama"));
     backendCombo_->addItem(QStringLiteral("OpenCode Go"), QStringLiteral("opencode"));
     backendCombo_->addItem(QStringLiteral("Codex CLI"), QStringLiteral("codex"));
     controls->addWidget(backendCombo_);
@@ -103,12 +112,20 @@ MeetingAnalysisDialog::MeetingAnalysisDialog(const MeetingEntry &meeting, const 
     providerInfo_ = new QLabel(this); providerInfo_->setWordWrap(true); layout->addWidget(providerInfo_);
     modelStatus_ = new QLabel(this); modelStatus_->setObjectName(QStringLiteral("analysisModelsStatus"));
     modelStatus_->setWordWrap(true); layout->addWidget(modelStatus_);
-    localModel_ = settings_.analysisOllamaModel;
     codexModel_ = QStringLiteral("Default (Codex)");
+    for (const QString &url : ollamaUrls_) ollamaModels_.insert(url, settings_.analysisOllamaModel);
     if (!settings_.settingsPath.isEmpty()) {
         QSettings stored(settings_.settingsPath, QSettings::IniFormat);
-        localModel_ = stored.value(QStringLiteral("analysis_ollama_model"), localModel_).toString();
-        localOllamaModel_ = stored.value(QStringLiteral("analysis_local_ollama_model")).toString();
+        for (int index = 0; index < ollamaUrls_.size(); ++index) {
+            const QString &url = ollamaUrls_[index];
+            QString model = stored.value(ollamaModelKey(url)).toString();
+            if (model.isEmpty()) {
+                const QString legacyKey = index == 0 ? QStringLiteral("analysis_ollama_model")
+                        : QStringLiteral("analysis_local_ollama_model");
+                model = stored.value(legacyKey, settings_.analysisOllamaModel).toString();
+            }
+            ollamaModels_[url] = model.isEmpty() ? settings_.analysisOllamaModel : model;
+        }
         opencodeModel_ = stored.value(QStringLiteral("analysis_opencode_model")).toString();
         const QString savedModel = stored.value(QStringLiteral("analysis_codex_model")).toString();
         if (!savedModel.isEmpty()) codexModel_ = savedModel;
@@ -121,8 +138,13 @@ MeetingAnalysisDialog::MeetingAnalysisDialog(const MeetingEntry &meeting, const 
     connect(modelCombo_, &QComboBox::activated, this, [this]() { modelManuallyEdited_ = true; });
     auto *splitter = new QSplitter(this);
     versions_ = new QListWidget(splitter); versions_->setObjectName(QStringLiteral("analysisVersions"));
+    versions_->setWordWrap(true);
+    versions_->setTextElideMode(Qt::ElideNone);
+    versions_->setUniformItemSizes(false);
+    versions_->setSpacing(4);
     preview_ = new QPlainTextEdit(splitter); preview_->setObjectName(QStringLiteral("analysisPreview")); preview_->setReadOnly(true);
     splitter->addWidget(versions_); splitter->addWidget(preview_); splitter->setStretchFactor(1, 3);
+    splitter->setSizes({420, 720});
     layout->addWidget(splitter, 1);
     versionInfo_ = new QLabel(this); versionInfo_->setWordWrap(true); versionInfo_->setObjectName(QStringLiteral("analysisVersionInfo")); layout->addWidget(versionInfo_);
     status_ = new QLabel(this); status_->setObjectName(QStringLiteral("analysisStatus")); status_->setWordWrap(true); layout->addWidget(status_);
@@ -185,18 +207,23 @@ void MeetingAnalysisDialog::reject()
     QDialog::reject();
 }
 
+QString MeetingAnalysisDialog::currentOllamaUrl() const
+{
+    if (!backendCombo_ || backendCombo_->currentData().toString() != QStringLiteral("ollama")) return {};
+    return ollamaUrls_.value(backendCombo_->currentIndex());
+}
+
 void MeetingAnalysisDialog::switchProvider()
 {
     if (!activeBackend_.isEmpty()) {
         if (activeBackend_ == QStringLiteral("codex")) codexModel_ = modelCombo_->currentText().trimmed();
-        else if (activeBackend_ == QStringLiteral("ollama_local")) localOllamaModel_ = modelCombo_->currentText().trimmed();
         else if (activeBackend_ == QStringLiteral("opencode")) opencodeModel_ = modelCombo_->currentText().trimmed();
-        else localModel_ = modelCombo_->currentText().trimmed();
+        else ollamaModels_[activeOllamaUrl_] = modelCombo_->currentText().trimmed();
     }
     activeBackend_ = backendCombo_->currentData().toString();
+    activeOllamaUrl_ = currentOllamaUrl();
     const QString selected = activeBackend_ == QStringLiteral("codex") ? codexModel_ :
-            activeBackend_ == QStringLiteral("ollama_local") ? localOllamaModel_ :
-            activeBackend_ == QStringLiteral("opencode") ? opencodeModel_ : localModel_;
+            activeBackend_ == QStringLiteral("opencode") ? opencodeModel_ : ollamaModels_.value(activeOllamaUrl_);
     {
         const QSignalBlocker blocker(modelCombo_);
         modelCombo_->clear(); modelCombo_->setEditText(selected);
@@ -206,9 +233,7 @@ void MeetingAnalysisDialog::switchProvider()
         providerInfo_->setText(QStringLiteral("Codex CLI sends the transcript to OpenAI and uses your ChatGPT plan allowance. Sign in with ChatGPT using codex login."));
     else if (activeBackend_ == QStringLiteral("opencode"))
         providerInfo_->setText(QStringLiteral("OpenCode CLI sends the transcript to the selected OpenCode Go model using your connected account."));
-    else if (activeBackend_ == QStringLiteral("ollama_local"))
-        providerInfo_->setText(QStringLiteral("The transcript is sent to Ollama on this computer (127.0.0.1:11434)."));
-    else providerInfo_->setText(QStringLiteral("The transcript is sent to the configured Ollama server. Only models installed on that server are listed."));
+    else providerInfo_->setText(QStringLiteral("The transcript is sent to %1. Only models installed on that server are listed.").arg(activeOllamaUrl_));
     reasoningRow_->setVisible(activeBackend_ == QStringLiteral("codex"));
     refreshModels();
 }
@@ -222,6 +247,7 @@ void MeetingAnalysisDialog::refreshModels()
         ignoringModels_ = false;
     }
     modelsBackend_ = activeBackend_;
+    modelsEndpoint_ = activeBackend_ == QStringLiteral("ollama") ? activeOllamaUrl_ : QString();
     const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
     const QString script = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("meeting_analysis.py"));
     if (python.isEmpty() || !QFileInfo::exists(script)) {
@@ -233,14 +259,15 @@ void MeetingAnalysisDialog::refreshModels()
     modelsProcess_.setProcessEnvironment(env);
     modelStatus_->setText(QStringLiteral("Loading models…"));
     modelsProcess_.start(python, {script, QStringLiteral("--list-models"), QStringLiteral("--backend"), modelsBackend_,
-            QStringLiteral("--endpoint"), settings_.analysisOllamaUrl});
+            QStringLiteral("--endpoint"), modelsEndpoint_});
 }
 
 void MeetingAnalysisDialog::finishModelList(int exitCode, QProcess::ExitStatus exitStatus)
 {
     const QByteArray output = modelsProcess_.readAllStandardOutput();
     const QByteArray errors = modelsProcess_.readAllStandardError();
-    if (destroying_ || ignoringModels_ || modelsBackend_ != activeBackend_) return;
+    if (destroying_ || ignoringModels_ || modelsBackend_ != activeBackend_
+            || (modelsBackend_ == QStringLiteral("ollama") && modelsEndpoint_ != activeOllamaUrl_)) return;
     if (exitCode != 0 || exitStatus != QProcess::NormalExit) {
         QString details = QString::fromUtf8(errors).trimmed().right(1000);
         const QString envKey = qEnvironmentVariable("OPENAI_API_KEY");
@@ -309,15 +336,15 @@ void MeetingAnalysisDialog::startAnalysis()
     env.remove(QStringLiteral("OPENAI_API_KEY"));
     env.remove(QStringLiteral("CODEX_API_KEY"));
     if (backend_ == QStringLiteral("codex")) codexModel_ = model_.isEmpty() ? QStringLiteral("Default (Codex)") : model_;
-    else if (backend_ == QStringLiteral("ollama_local")) localOllamaModel_ = model_;
     else if (backend_ == QStringLiteral("opencode")) opencodeModel_ = model_;
-    else localModel_ = model_;
+    else ollamaModels_[activeOllamaUrl_] = model_;
     if (!settings_.settingsPath.isEmpty()) {
         QSettings stored(settings_.settingsPath, QSettings::IniFormat);
         const QString modelKey = backend_ == QStringLiteral("codex") ? QStringLiteral("analysis_codex_model") :
-                backend_ == QStringLiteral("ollama_local") ? QStringLiteral("analysis_local_ollama_model") :
-                backend_ == QStringLiteral("opencode") ? QStringLiteral("analysis_opencode_model") : QStringLiteral("analysis_ollama_model");
+                backend_ == QStringLiteral("opencode") ? QStringLiteral("analysis_opencode_model") : ollamaModelKey(activeOllamaUrl_);
         stored.setValue(modelKey, model_);
+        if (backend_ == QStringLiteral("ollama") && activeOllamaUrl_ == ollamaUrls_.constFirst())
+            stored.setValue(QStringLiteral("analysis_ollama_model"), model_);
         if (backend_ == QStringLiteral("codex")) stored.setValue(QStringLiteral("analysis_codex_reasoning_effort"), reasoningEffort_);
         stored.sync();
     }
@@ -328,7 +355,7 @@ void MeetingAnalysisDialog::startAnalysis()
     emit busyChanged(true);
     QStringList arguments{script, QStringLiteral("--transcript"), QStringLiteral("-"),
             QStringLiteral("--backend"), backend_, QStringLiteral("--model"), model_,
-            QStringLiteral("--endpoint"), settings_.analysisOllamaUrl, QStringLiteral("--codex-cli"), settings_.analysisCodexCli};
+            QStringLiteral("--endpoint"), activeOllamaUrl_};
     if (!reasoningEffort_.isEmpty()) arguments << QStringLiteral("--reasoning-effort") << reasoningEffort_;
     process_.start(python, arguments);
     process_.write(transcriptSnapshot_);
@@ -416,13 +443,18 @@ void MeetingAnalysisDialog::reloadVersions(const QString &select)
         QFile file(info.absoluteFilePath()); if (!file.open(QIODevice::ReadOnly)) continue;
         const QJsonObject meta = metadata(file.readLine());
         const QDateTime date = QDateTime::fromString(meta.value(QStringLiteral("created")).toString(), Qt::ISODateWithMs).toLocalTime();
-        QString label = date.isValid() ? QStringLiteral("%1 — %2 / %3").arg(date.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")), meta.value(QStringLiteral("backend")).toString(), meta.value(QStringLiteral("model")).toString()) : info.fileName();
+        const QString firstLine = date.isValid()
+                ? QStringLiteral("%1 — %2").arg(date.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")), meta.value(QStringLiteral("backend")).toString())
+                : info.fileName();
+        const QString model = meta.value(QStringLiteral("model")).toString().trimmed();
         const QString effort = meta.value(QStringLiteral("reasoning_effort")).toString();
-        if (!effort.isEmpty()) label += QStringLiteral(" / %1").arg(effort);
         const QJsonValue duration = meta.value(QStringLiteral("duration_ms"));
-        label += QStringLiteral(" / Duration: %1")
-                .arg(duration.isDouble() ? durationText(static_cast<qint64>(duration.toDouble())) : QStringLiteral("unknown"));
-        auto *item = new QListWidgetItem(label, versions_); item->setData(Qt::UserRole, info.absoluteFilePath());
+        const QString durationValue = duration.isDouble() ? durationText(static_cast<qint64>(duration.toDouble())) : QStringLiteral("unknown");
+        QString secondLine = QStringLiteral("Model: %1 · Duration: %2").arg(model.isEmpty() ? QStringLiteral("unknown") : model, durationValue);
+        if (!effort.isEmpty()) secondLine += QStringLiteral(" · Reasoning: %1").arg(effort);
+        auto *item = new QListWidgetItem(firstLine + QLatin1Char('\n') + secondLine, versions_);
+        item->setData(Qt::UserRole, info.absoluteFilePath());
+        item->setSizeHint(QSize(0, versions_->fontMetrics().lineSpacing() * 2 + 8));
         if (info.absoluteFilePath() == old) versions_->setCurrentItem(item);
     }
     if (!versions_->currentItem() && versions_->count()) versions_->setCurrentRow(0);

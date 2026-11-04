@@ -17,6 +17,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 #include <QProcessEnvironment>
 #include <QHBoxLayout>
@@ -49,6 +50,15 @@ void setComboValue(QComboBox *combo, const QString &value)
 
     combo->addItem(value);
     combo->setCurrentIndex(combo->count() - 1);
+}
+
+bool validOllamaUrl(const QString &value)
+{
+    const QUrl url(value.trimmed(), QUrl::StrictMode);
+    return url.isValid() && (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https"))
+            && !url.host().isEmpty() && !url.authority(QUrl::FullyEncoded).contains(QLatin1Char('@'))
+            && (url.path().isEmpty() || url.path() == QStringLiteral("/"))
+            && !url.hasQuery() && !url.hasFragment();
 }
 
 } // namespace
@@ -239,15 +249,33 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
 
     auto *analysisSection = new QGroupBox(QStringLiteral("Meeting analysis"), content);
     auto *analysisLayout = createFormLayout(analysisSection);
-    auto *analysisInfo = new QLabel(QStringLiteral("Analysis sends the transcript to the configured Ollama server or to OpenAI through Codex CLI."), analysisSection);
+    auto *analysisInfo = new QLabel(QStringLiteral("Analysis sends the transcript to one of the configured Ollama servers, or uses Codex CLI/OpenCode CLI installed on this computer."), analysisSection);
     analysisInfo->setWordWrap(true); analysisLayout->addRow(analysisInfo);
-    analysisOllamaUrlEdit_ = new QLineEdit(settings.analysisOllamaUrl, analysisSection);
+    analysisOllamaServers_ = new QListWidget(analysisSection);
+    analysisOllamaServers_->setObjectName(QStringLiteral("analysisOllamaServers"));
+    analysisOllamaServers_->setSelectionMode(QAbstractItemView::SingleSelection);
+    analysisOllamaServers_->setMinimumHeight(76);
+    for (const QString &url : settings.analysisOllamaUrls) {
+        if (!url.trimmed().isEmpty()) analysisOllamaServers_->addItem(url.trimmed());
+    }
+    if (analysisOllamaServers_->count() == 0) analysisOllamaServers_->addItem(QStringLiteral("http://127.0.0.1:11434"));
+    analysisOllamaServers_->setCurrentRow(0);
+    analysisLayout->addRow(QStringLiteral("Ollama servers"), analysisOllamaServers_);
+
+    auto *analysisAddressRow = new QWidget(analysisSection);
+    auto *analysisAddressLayout = new QHBoxLayout(analysisAddressRow);
+    analysisAddressLayout->setContentsMargins(0, 0, 0, 0);
+    analysisOllamaUrlEdit_ = new QLineEdit(analysisOllamaServers_->currentItem()->text(), analysisAddressRow);
     analysisOllamaUrlEdit_->setObjectName(QStringLiteral("analysisOllamaUrl"));
-    analysisCodexCliEdit_ = new QLineEdit(settings.analysisCodexCli, analysisSection);
-    analysisCodexCliEdit_->setObjectName(QStringLiteral("analysisCodexCli"));
-    analysisCodexCliEdit_->setPlaceholderText(QStringLiteral("codex, or full path to Codex CLI"));
-    analysisLayout->addRow(QStringLiteral("Ollama address"), analysisOllamaUrlEdit_);
-    analysisLayout->addRow(QStringLiteral("Codex CLI"), analysisCodexCliEdit_);
+    analysisOllamaUrlEdit_->setPlaceholderText(QStringLiteral("http://host:11434"));
+    auto *addOllama = new QPushButton(QStringLiteral("Add"), analysisAddressRow);
+    addOllama->setObjectName(QStringLiteral("analysisAddOllama"));
+    auto *removeOllama = new QPushButton(QStringLiteral("Remove"), analysisAddressRow);
+    removeOllama->setObjectName(QStringLiteral("analysisRemoveOllama"));
+    analysisAddressLayout->addWidget(analysisOllamaUrlEdit_, 1);
+    analysisAddressLayout->addWidget(addOllama);
+    analysisAddressLayout->addWidget(removeOllama);
+    analysisLayout->addRow(QStringLiteral("Address"), analysisAddressRow);
     auto *checkOllama = new QPushButton(QStringLiteral("Check Ollama connection"), analysisSection);
     checkOllama->setObjectName(QStringLiteral("analysisCheckOllama"));
     analysisCheckStatus_ = new QLabel(QStringLiteral("Not checked."), analysisSection);
@@ -255,6 +283,36 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     analysisCheckStatus_->setWordWrap(true);
     analysisLayout->addRow(checkOllama, analysisCheckStatus_);
     sectionsLayout->addWidget(analysisSection, 6, 0, 1, 2);
+    auto updateOllamaButtons = [this, removeOllama]() {
+        removeOllama->setEnabled(analysisOllamaServers_->count() > 1 && analysisOllamaServers_->currentRow() >= 0);
+    };
+    connect(analysisOllamaServers_, &QListWidget::currentRowChanged, this, [this, updateOllamaButtons](int row) {
+        if (row >= 0 && analysisOllamaServers_->item(row)) analysisOllamaUrlEdit_->setText(analysisOllamaServers_->item(row)->text());
+        updateOllamaButtons();
+    });
+    connect(addOllama, &QPushButton::clicked, this, [this, updateOllamaButtons]() {
+        const QString url = analysisOllamaUrlEdit_->text().trimmed();
+        if (!validOllamaUrl(url)) {
+            analysisCheckStatus_->setText(QStringLiteral("Enter an HTTP or HTTPS Ollama server address without a path or credentials."));
+            return;
+        }
+        const QList<QListWidgetItem *> matches = analysisOllamaServers_->findItems(url, Qt::MatchExactly);
+        if (!matches.isEmpty()) {
+            analysisOllamaServers_->setCurrentItem(matches.first());
+        } else {
+            analysisOllamaServers_->addItem(url);
+            analysisOllamaServers_->setCurrentRow(analysisOllamaServers_->count() - 1);
+        }
+        updateOllamaButtons();
+    });
+    connect(removeOllama, &QPushButton::clicked, this, [this, updateOllamaButtons]() {
+        const int row = analysisOllamaServers_->currentRow();
+        if (row < 0 || analysisOllamaServers_->count() <= 1) return;
+        delete analysisOllamaServers_->takeItem(row);
+        analysisOllamaServers_->setCurrentRow(qMin(row, analysisOllamaServers_->count() - 1));
+        updateOllamaButtons();
+    });
+    updateOllamaButtons();
     connect(checkOllama, &QPushButton::clicked, this, [this, checkOllama]() {
         if (ollamaCheckProcess_.state() != QProcess::NotRunning) return;
         const QUrl url(analysisOllamaUrlEdit_->text().trimmed(), QUrl::StrictMode);
@@ -281,7 +339,7 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
             for (const QJsonValue &value : models.toArray()) if (value.isString()) names << value.toString();
             analysisCheckStatus_->setText(names.isEmpty() ? QStringLiteral("Connected. No supported server models found.")
                     : QStringLiteral("Connected. Models: %1").arg(names.join(QStringLiteral(", "))));
-        } else analysisCheckStatus_->setText(QStringLiteral("Could not connect to Ollama. Check that it is running and the address is correct."));
+        } else analysisCheckStatus_->setText(QStringLiteral("Could not connect to %1. Check that it is running and the address is correct.").arg(analysisOllamaUrlEdit_->text().trimmed()));
     });
     connect(&ollamaCheckProcess_, &QProcess::errorOccurred, this, [this, checkOllama](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart) { checkOllama->setEnabled(true); analysisCheckStatus_->setText(QStringLiteral("Python 3 was not found.")); }
@@ -445,11 +503,16 @@ AppSettings PreferencesDialog::editedSettings() const
     edited.huggingFaceToken = huggingFaceTokenEdit_->text().trimmed();
     edited.huggingFaceHome = huggingFaceHomeEdit_->text().trimmed();
     edited.diarizationRuntimeDirectory = diarizationRuntimeEdit_->text().trimmed();
-    edited.analysisOllamaUrl = analysisOllamaUrlEdit_->text().trimmed();
+    edited.analysisOllamaUrls.clear();
+    for (int row = 0; row < analysisOllamaServers_->count(); ++row)
+        edited.analysisOllamaUrls.append(analysisOllamaServers_->item(row)->text().trimmed());
+    const int selectedRow = analysisOllamaServers_->currentRow();
+    const QString editedUrl = analysisOllamaUrlEdit_->text().trimmed();
+    if (selectedRow >= 0 && selectedRow < edited.analysisOllamaUrls.size() && validOllamaUrl(editedUrl))
+        edited.analysisOllamaUrls[selectedRow] = editedUrl;
     if (!baseSettings_.settingsPath.isEmpty()) {
         QSettings stored(baseSettings_.settingsPath, QSettings::IniFormat);
         edited.analysisOllamaModel = stored.value(QStringLiteral("analysis_ollama_model"), edited.analysisOllamaModel).toString();
     }
-    edited.analysisCodexCli = analysisCodexCliEdit_->text().trimmed();
     return edited;
 }

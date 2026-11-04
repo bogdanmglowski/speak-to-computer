@@ -36,6 +36,21 @@ QString defaultWakeWordPhrase()
     return QStringLiteral("alexa");
 }
 
+QStringList defaultOllamaUrls()
+{
+    return {QStringLiteral("http://127.0.0.1:11434")};
+}
+
+QStringList migrateOllamaUrls(const QString &legacyUrl)
+{
+    QStringList urls;
+    if (!legacyUrl.isEmpty()) urls.append(legacyUrl);
+    for (const QString &url : defaultOllamaUrls()) {
+        if (!urls.contains(url)) urls.append(url);
+    }
+    return urls;
+}
+
 QString appDataRootPath()
 {
     QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
@@ -78,9 +93,11 @@ QString modelDirectoryPathFor(const QString &currentModelPath)
 
 void ensureDefaults(QSettings *settings)
 {
-    if (!settings->contains(QStringLiteral("analysis_ollama_url"))) settings->setValue(QStringLiteral("analysis_ollama_url"), QStringLiteral("http://127.0.0.1:11434"));
+    if (!settings->contains(QStringLiteral("analysis_ollama_urls"))) {
+        const QString legacyUrl = settings->value(QStringLiteral("analysis_ollama_url")).toString().trimmed();
+        settings->setValue(QStringLiteral("analysis_ollama_urls"), migrateOllamaUrls(legacyUrl));
+    }
     if (!settings->contains(QStringLiteral("analysis_ollama_model"))) settings->setValue(QStringLiteral("analysis_ollama_model"), QStringLiteral("qwen3:8b"));
-    if (!settings->contains(QStringLiteral("analysis_codex_cli"))) settings->setValue(QStringLiteral("analysis_codex_cli"), QStringLiteral("codex"));
     if (!settings->contains(QStringLiteral("diarization_runtime_directory")))
         settings->setValue(QStringLiteral("diarization_runtime_directory"), QDir(appDataRootPath()).filePath(QStringLiteral("diarization/.venv")));
     if (!settings->contains(QStringLiteral("huggingface_home")))
@@ -310,9 +327,16 @@ bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
     settings.setValue(QStringLiteral("output_target"), settingsData.outputTarget.trimmed());
     settings.setValue(QStringLiteral("handoff_directory"), settingsData.handoffDirectory.trimmed());
     settings.setValue(QStringLiteral("handoff_trigger_words"), settingsData.handoffTriggerWords.trimmed());
-    settings.setValue(QStringLiteral("analysis_ollama_url"), settingsData.analysisOllamaUrl.trimmed());
+    QStringList ollamaUrls;
+    for (const QString &url : settingsData.analysisOllamaUrls) {
+        const QString normalized = url.trimmed();
+        if (!normalized.isEmpty() && !ollamaUrls.contains(normalized)) ollamaUrls.append(normalized);
+    }
+    if (ollamaUrls.isEmpty()) ollamaUrls = defaultOllamaUrls();
+    settings.setValue(QStringLiteral("analysis_ollama_urls"), ollamaUrls);
+    settings.remove(QStringLiteral("analysis_ollama_url"));
     settings.setValue(QStringLiteral("analysis_ollama_model"), settingsData.analysisOllamaModel.trimmed());
-    settings.setValue(QStringLiteral("analysis_codex_cli"), settingsData.analysisCodexCli.trimmed().isEmpty() ? QStringLiteral("codex") : settingsData.analysisCodexCli.trimmed());
+    settings.remove(QStringLiteral("analysis_codex_cli"));
     settings.setValue(QStringLiteral("meetings_directory"), settingsData.meetingsDirectory.trimmed().isEmpty()
             ? QDir(appDataRootPath()).filePath(QStringLiteral("meetings")) : settingsData.meetingsDirectory.trimmed());
     if (!settingsData.diarizationRuntimeDirectory.trimmed().isEmpty())
@@ -435,9 +459,14 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     result.outputTarget = settings.value(QStringLiteral("output_target")).toString().trimmed();
     result.handoffDirectory = settings.value(QStringLiteral("handoff_directory")).toString().trimmed();
     result.handoffTriggerWords = settings.value(QStringLiteral("handoff_trigger_words")).toString().trimmed();
-    result.analysisOllamaUrl = settings.value(QStringLiteral("analysis_ollama_url")).toString().trimmed();
+    result.analysisOllamaUrls = settings.value(QStringLiteral("analysis_ollama_urls")).toStringList();
+    if (result.analysisOllamaUrls.isEmpty()) {
+        const QString legacyUrl = settings.value(QStringLiteral("analysis_ollama_url")).toString().trimmed();
+        result.analysisOllamaUrls = migrateOllamaUrls(legacyUrl);
+    }
+    for (QString &url : result.analysisOllamaUrls) url = url.trimmed();
+    result.analysisOllamaUrls.removeAll(QString());
     result.analysisOllamaModel = settings.value(QStringLiteral("analysis_ollama_model")).toString().trimmed();
-    result.analysisCodexCli = expandUserPath(settings.value(QStringLiteral("analysis_codex_cli")).toString().trimmed());
     result.meetingsDirectory = expandUserPath(settings.value(QStringLiteral("meetings_directory")).toString().trimmed());
     result.diarizationRuntimeDirectory = expandUserPath(settings.value(QStringLiteral("diarization_runtime_directory")).toString().trimmed());
     result.huggingFaceHome = expandUserPath(settings.value(QStringLiteral("huggingface_home")).toString().trimmed());

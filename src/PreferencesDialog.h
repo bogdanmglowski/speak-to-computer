@@ -9,6 +9,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLineEdit;
+class QListWidget;
 class QSpinBox;
 class QLabel;
 class QPushButton;
@@ -58,8 +59,8 @@ private:
     QLineEdit *huggingFaceTokenEdit_ = nullptr;
     QLineEdit *huggingFaceHomeEdit_ = nullptr;
     QLineEdit *diarizationRuntimeEdit_ = nullptr;
+    QListWidget *analysisOllamaServers_ = nullptr;
     QLineEdit *analysisOllamaUrlEdit_ = nullptr;
-    QLineEdit *analysisCodexCliEdit_ = nullptr;
     QLabel *analysisCheckStatus_ = nullptr;
     QProcess ollamaCheckProcess_;
     QLabel *diarizationStatus_ = nullptr;
