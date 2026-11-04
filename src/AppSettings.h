@@ -13,6 +13,8 @@ struct AppSettings {
     // pin = windowactivate pinned start window; focus = paste into current focus
     static constexpr auto kPasteTargetPin = "pin";
     static constexpr auto kPasteTargetFocus = "focus";
+    static constexpr auto kPasteBehaviorClassic = "classic";
+    static constexpr auto kPasteBehaviorTerminalCompatible = "terminal_compatible";
 
     QString settingsPath;
     QString engine; // whisper_cpp | realtime | buzzasr | parakeet
@@ -41,6 +43,8 @@ struct AppSettings {
     QString dictionaryPath;
     // Where text is inserted: pin (window at recording start) | focus (current focus).
     QString pasteTarget; // pin | focus
+    // How text is put into the target: classic Qt clipboard + Ctrl+V, or X11-aware terminal paste.
+    QString pasteBehavior; // classic | terminal_compatible
     bool miniOverlayEnabled = false;
     // Realtime: when this whole word is spoken at end of stream → strip it + press Enter.
     bool sendKeywordEnabled = true;
@@ -75,6 +79,8 @@ struct AppSettings {
     bool isParakeetEngine() const;
     bool isPinPasteTarget() const;
     bool isFocusPasteTarget() const;
+    bool isClassicPasteBehavior() const;
+    bool isTerminalCompatiblePasteBehavior() const;
 
     static QString expandUserPath(const QString &path);
     static QString defaultDictionaryPath();
@@ -88,6 +94,9 @@ struct AppSettings {
     static QString pasteTargetLabel(const QString &pasteTarget);
     static QString normalizePasteTarget(const QString &pasteTarget);
     static QStringList pasteTargetChoices();
+    static QString normalizePasteBehavior(const QString &pasteBehavior);
+    // Remove a whole send keyword at the end of a transcript and report whether it matched.
+    static bool stripTrailingSendKeyword(QString *transcript, const QString &keyword);
     // Build soft-prompt string from dictionary file (empty if missing/blank).
     static QString loadDictionaryPrompt(const QString &dictionaryPath);
     static QStringList existingModelPaths(const QString &currentModelPath);

@@ -9,6 +9,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QRegularExpression>
 
 #include <algorithm>
 
@@ -244,6 +245,10 @@ void ensureDefaults(QSettings *settings)
     if (!settings->contains(QStringLiteral("paste_target"))) {
         settings->setValue(QStringLiteral("paste_target"), QStringLiteral("pin"));
     }
+    if (!settings->contains(QStringLiteral("paste_behavior"))) {
+        // Keep the pre-terminal-aware behavior as the default for existing and new users.
+        settings->setValue(QStringLiteral("paste_behavior"), QString::fromUtf8(AppSettings::kPasteBehaviorClassic));
+    }
     if (!settings->contains(QStringLiteral("send_keyword_enabled"))) {
         settings->setValue(QStringLiteral("send_keyword_enabled"), true);
     }
@@ -417,6 +422,16 @@ bool AppSettings::isFocusPasteTarget() const
     return normalizePasteTarget(pasteTarget) == QString::fromUtf8(kPasteTargetFocus);
 }
 
+bool AppSettings::isClassicPasteBehavior() const
+{
+    return normalizePasteBehavior(pasteBehavior) == QString::fromUtf8(kPasteBehaviorClassic);
+}
+
+bool AppSettings::isTerminalCompatiblePasteBehavior() const
+{
+    return normalizePasteBehavior(pasteBehavior) == QString::fromUtf8(kPasteBehaviorTerminalCompatible);
+}
+
 QString AppSettings::normalizeEngine(const QString &engine)
 {
     const QString trimmed = engine.trimmed();
@@ -468,6 +483,36 @@ QStringList AppSettings::pasteTargetChoices()
             QString::fromUtf8(kPasteTargetPin),
             QString::fromUtf8(kPasteTargetFocus),
     };
+}
+
+QString AppSettings::normalizePasteBehavior(const QString &pasteBehavior)
+{
+    if (pasteBehavior.trimmed().compare(QString::fromUtf8(kPasteBehaviorTerminalCompatible), Qt::CaseInsensitive) == 0) {
+        return QString::fromUtf8(kPasteBehaviorTerminalCompatible);
+    }
+    return QString::fromUtf8(kPasteBehaviorClassic);
+}
+
+bool AppSettings::stripTrailingSendKeyword(QString *transcript, const QString &keyword)
+{
+    if (transcript == nullptr || keyword.trimmed().isEmpty()) {
+        return false;
+    }
+
+    const QString escapedKeyword = QRegularExpression::escape(keyword.trimmed());
+    const QRegularExpression expression(
+            QStringLiteral("(?i)(?:^|[\\s])(%1)([.!?…,;:]*)\\s*$").arg(escapedKeyword));
+    const QRegularExpressionMatch match = expression.match(*transcript);
+    if (!match.hasMatch()) {
+        return false;
+    }
+
+    int stripFrom = match.capturedStart(1);
+    while (stripFrom > 0 && transcript->at(stripFrom - 1).isSpace()) {
+        --stripFrom;
+    }
+    *transcript = transcript->left(stripFrom);
+    return true;
 }
 
 QString AppSettings::normalizeLanguage(const QString &language)
@@ -653,6 +698,7 @@ bool AppSettings::save(const AppSettings &settingsData, QString *errorMessage)
     settings.setValue(QStringLiteral("push_to_talk_send_enter"), settingsData.pushToTalkSendEnter);
     settings.setValue(QStringLiteral("dictionary_path"), settingsData.dictionaryPath.trimmed());
     settings.setValue(QStringLiteral("paste_target"), normalizePasteTarget(settingsData.pasteTarget));
+    settings.setValue(QStringLiteral("paste_behavior"), normalizePasteBehavior(settingsData.pasteBehavior));
     settings.setValue(QStringLiteral("mini_overlay_enabled"), settingsData.miniOverlayEnabled);
     settings.setValue(QStringLiteral("send_keyword_enabled"), settingsData.sendKeywordEnabled);
     settings.setValue(QStringLiteral("send_keyword"), settingsData.sendKeyword.trimmed());
@@ -909,6 +955,8 @@ AppSettings AppSettings::loadFromPath(const QString &settingsPath)
     }
     result.pasteTarget = normalizePasteTarget(
             settings.value(QStringLiteral("paste_target"), QStringLiteral("pin")).toString());
+    result.pasteBehavior = normalizePasteBehavior(
+            settings.value(QStringLiteral("paste_behavior"), QString::fromUtf8(kPasteBehaviorClassic)).toString());
     result.miniOverlayEnabled = settings.value(QStringLiteral("mini_overlay_enabled"), false).toBool();
     result.sendKeywordEnabled = settings.value(QStringLiteral("send_keyword_enabled"), true).toBool();
     result.sendKeyword = settings.value(QStringLiteral("send_keyword"), QStringLiteral("go")).toString().trimmed();

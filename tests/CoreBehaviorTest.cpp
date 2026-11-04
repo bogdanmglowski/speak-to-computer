@@ -75,6 +75,8 @@ private slots:
     void meetingAnalysisShouldSaveVersionsAndDetectChanges();
     void meetingAudioFilterShouldPreserveSeparateChannels();
     void settingsShouldDefaultPasteTargetToPin();
+    void settingsShouldDefaultToClassicPasteBehavior();
+    void transcriptShouldStripTrailingSendKeyword();
     void settingsShouldSaveAndReloadMiniOverlayToggle();
     void preferencesShouldReturnMiniOverlayToggle();
     void settingsShouldLoadSeparateHotkeyDefaults();
@@ -1314,6 +1316,34 @@ void CoreBehaviorTest::settingsShouldDefaultPasteTargetToPin()
     QCOMPARE(AppSettings::pasteTargetLabel(QStringLiteral("focus")), QStringLiteral("Focus"));
     QCOMPARE(AppSettings::normalizePasteTarget(QStringLiteral("FOCUS")),
             QString::fromUtf8(AppSettings::kPasteTargetFocus));
+}
+
+void CoreBehaviorTest::settingsShouldDefaultToClassicPasteBehavior()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    AppSettings settings = AppSettings::loadFromPath(path);
+    QCOMPARE(settings.pasteBehavior, QString::fromUtf8(AppSettings::kPasteBehaviorClassic));
+    QVERIFY(settings.isClassicPasteBehavior());
+    QVERIFY(!settings.isTerminalCompatiblePasteBehavior());
+
+    settings.pasteBehavior = QString::fromUtf8(AppSettings::kPasteBehaviorTerminalCompatible);
+    QString errorMessage;
+    QVERIFY2(AppSettings::save(settings, &errorMessage), qPrintable(errorMessage));
+    const AppSettings loaded = AppSettings::loadFromPath(path);
+    QVERIFY(loaded.isTerminalCompatiblePasteBehavior());
+    QVERIFY(!loaded.isClassicPasteBehavior());
+}
+
+void CoreBehaviorTest::transcriptShouldStripTrailingSendKeyword()
+{
+    QString transcript = QStringLiteral("uruchom test GO!");
+    QVERIFY(AppSettings::stripTrailingSendKeyword(&transcript, QStringLiteral("go")));
+    QCOMPARE(transcript, QStringLiteral("uruchom test"));
+
+    transcript = QStringLiteral("nie zmieniaj together");
+    QVERIFY(!AppSettings::stripTrailingSendKeyword(&transcript, QStringLiteral("go")));
+    QCOMPARE(transcript, QStringLiteral("nie zmieniaj together"));
 }
 
 void CoreBehaviorTest::settingsShouldLoadSeparateHotkeyDefaults()
