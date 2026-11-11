@@ -22,6 +22,8 @@
 #include <QProcess>
 #include <QSignalBlocker>
 #include <QLocale>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QStandardPaths>
 #include <QSystemTrayIcon>
 
@@ -279,6 +281,36 @@ bool SpeakToComputerApp::start()
 {
     BuzzAsrRunner::killOrphanedDaemons();
     QString errorMessage;
+    if (ClipboardPaster::isWayland()) {
+        commandServer_ = new QLocalServer(this);
+        commandServer_->setSocketOptions(QLocalServer::UserAccessOption);
+        const QString socketPath = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation)
+                + QStringLiteral("/speak-to-computer.sock");
+        if (!commandServer_->listen(socketPath)) {
+            QLocalSocket probe;
+            probe.connectToServer(socketPath);
+            if (probe.waitForConnected(300)) {
+                qWarning() << "Another speak-to-computer instance already owns the command socket";
+                return false;
+            }
+            QLocalServer::removeServer(socketPath);
+            if (!commandServer_->listen(socketPath)) {
+                qWarning() << "Cannot listen for Sway commands:" << commandServer_->errorString();
+                return false;
+            }
+        }
+        connect(commandServer_, &QLocalServer::newConnection, this, [this]() {
+            while (QLocalSocket *client = commandServer_->nextPendingConnection()) {
+                connect(client, &QLocalSocket::readyRead, this, [this, client]() {
+                    if (!client->canReadLine()) return;
+                    if (client->readLine().trimmed() == QByteArrayLiteral("dictate")) toggleWaylandDictation();
+                    client->disconnectFromServer();
+                });
+                connect(client, &QLocalSocket::disconnected, client, &QObject::deleteLater);
+            }
+        });
+    }
+    if (!ClipboardPaster::isWayland()) {
     if (!dictateHotkey_.registerHotkey(settings_.hotkeyDictate, &errorMessage)) {
         const QString fullMessage =
                 QStringLiteral("Could not register dictation hotkey %1: %2")
@@ -310,6 +342,9 @@ bool SpeakToComputerApp::start()
     if (!registerPushToTalkButton(settings_.pushToTalkButton, &errorMessage)) {
         qWarning().noquote() << errorMessage;
     }
+    } else {
+        qInfo() << "Wayland session: use tray actions to start and stop dictation";
+    }
     qInfo().noquote() << "settings:" << settings_.settingsPath
                       << "engine:" << settings_.engine;
     refreshVadRuntimeStatus();
@@ -334,6 +369,20 @@ bool SpeakToComputerApp::start()
     }
 
     return true;
+}
+
+void SpeakToComputerApp::toggleWaylandDictation()
+{
+    if (state_ == State::Recording) {
+        stopRecording(OutputMode::Original);
+    } else if (state_ == State::Idle && !meetingDialog_->isBusy() && !engineSwitchInProgress_) {
+        const quint64 target = ClipboardPaster::swayFocusedWindow();
+        if (target == 0) {
+            overlay_.showError(QStringLiteral("Could not identify the focused Sway window."));
+            return;
+        }
+        startRecording(OutputMode::Original, target);
+    }
 }
 
 bool SpeakToComputerApp::registerPushToTalkButton(int button, QString *errorMessage)
@@ -425,7 +474,7 @@ void SpeakToComputerApp::startRecording(OutputMode outputMode, quint64 targetWin
     state_ = State::Recording;
     overlay_.setGpuMemoryLabel(QString());
     gpuMonitor_.start();
-    if (!mouseFinishHotkey_.registerMouseButton(9, &errorMessage)) {
+    if (!ClipboardPaster::isWayland() && !mouseFinishHotkey_.registerMouseButton(9, &errorMessage)) {
         qWarning().noquote() << errorMessage;
     }
     recordingClock_.restart();
@@ -837,7 +886,7 @@ void SpeakToComputerApp::handlePasteTargetSelected(const QString &pasteTargetId)
     // Switching to Pin mid-session re-pins whatever currently has focus.
     if (settings_.isPinPasteTarget()
             && (state_ == State::Recording || state_ == State::Idle)) {
-        const quint64 active = dictateHotkey_.activeWindow();
+        const quint64 active = ClipboardPaster::isWayland() ? ClipboardPaster::swayFocusedWindow() : dictateHotkey_.activeWindow();
         if (active != 0) {
             targetWindow_ = active;
         }
@@ -1070,7 +1119,7 @@ void SpeakToComputerApp::handleWakeWordDetected()
         return;
     }
 
-    const quint64 activeWindow = dictateHotkey_.activeWindow();
+    const quint64 activeWindow = ClipboardPaster::isWayland() ? ClipboardPaster::swayFocusedWindow() : dictateHotkey_.activeWindow();
     startRecording(OutputMode::Original, activeWindow);
 }
 
@@ -1251,13 +1300,24 @@ bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const
     if (!AudioRecorder::hasSupportedBackend(settings_.audioBackend, errorMessage)) {
         return false;
     }
-    if (QStandardPaths::findExecutable(QStringLiteral("xdotool")).isEmpty()) {
+    if (ClipboardPaster::isWayland()) {
+        if (qEnvironmentVariableIsEmpty("SWAYSOCK")) {
+            if (errorMessage) *errorMessage = QStringLiteral("Wayland support currently requires Sway.");
+            return false;
+        }
+        for (const QString &program : {QStringLiteral("swaymsg"), QStringLiteral("wl-copy"), QStringLiteral("wtype")}) {
+            if (QStandardPaths::findExecutable(program).isEmpty()) {
+                if (errorMessage) *errorMessage = QStringLiteral("Required Wayland program not found: %1").arg(program);
+                return false;
+            }
+        }
+    } else if (QStandardPaths::findExecutable(QStringLiteral("xdotool")).isEmpty()) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("xdotool was not found in PATH.");
         }
         return false;
     }
-    if (settings_.isTerminalCompatiblePasteBehavior()
+    if (!ClipboardPaster::isWayland() && settings_.isTerminalCompatiblePasteBehavior()
             && QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty()) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("xclip was not found in PATH (required for terminal-compatible paste).");
@@ -1300,7 +1360,7 @@ bool SpeakToComputerApp::validateRuntime(QString *errorMessage) const
     }
 
     if (settings_.isRealtimeEngine()) {
-        if (settings_.isTerminalCompatiblePasteBehavior()
+        if (!ClipboardPaster::isWayland() && settings_.isTerminalCompatiblePasteBehavior()
                 && QStandardPaths::findExecutable(QStringLiteral("xclip")).isEmpty()) {
             if (errorMessage != nullptr) {
                 *errorMessage = QStringLiteral("xclip was not found in PATH (required for Realtime paste).");
@@ -1443,6 +1503,7 @@ void SpeakToComputerApp::handleMiniOverlayToggled(bool enabled)
 
 bool SpeakToComputerApp::applySettings(const AppSettings &newSettings, QString *errorMessage)
 {
+    if (!ClipboardPaster::isWayland()) {
     QString hotkeyError;
     if (!dictateHotkey_.registerHotkey(newSettings.hotkeyDictate, &hotkeyError)) {
         if (!dictateHotkey_.registerHotkey(settings_.hotkeyDictate, nullptr)) {
@@ -1476,11 +1537,14 @@ bool SpeakToComputerApp::applySettings(const AppSettings &newSettings, QString *
         }
         return false;
     }
+    }
 
     if (!AppSettings::save(newSettings, errorMessage)) {
-        dictateHotkey_.registerHotkey(settings_.hotkeyDictate, nullptr);
-        translateHotkey_.registerHotkey(settings_.hotkeyTranslateEn, nullptr);
-        registerPushToTalkButton(settings_.pushToTalkButton, nullptr);
+        if (!ClipboardPaster::isWayland()) {
+            dictateHotkey_.registerHotkey(settings_.hotkeyDictate, nullptr);
+            translateHotkey_.registerHotkey(settings_.hotkeyTranslateEn, nullptr);
+            registerPushToTalkButton(settings_.pushToTalkButton, nullptr);
+        }
         return false;
     }
 
@@ -1597,6 +1661,7 @@ QString SpeakToComputerApp::hotkeyFor(OutputMode outputMode) const
 
 QStringList SpeakToComputerApp::recordingHints() const
 {
+    if (ClipboardPaster::isWayland()) return {QStringLiteral("Stop recording from the tray menu")};
     if (pushToTalkActive_) {
         return {QStringLiteral("Release push-to-talk to paste")};
     }
@@ -1671,6 +1736,25 @@ void SpeakToComputerApp::setupTrayIcon()
 
     trayStatusAction_ = trayMenu_.addAction(trayStatusText());
     trayStatusAction_->setEnabled(false);
+    if (ClipboardPaster::isWayland()) {
+        auto addRecordingAction = [this](const QString &label, OutputMode mode) {
+            QAction *action = trayMenu_.addAction(label);
+            connect(action, &QAction::triggered, this, [this, mode]() {
+                if (state_ == State::Recording) {
+                    stopRecording(mode);
+                } else if (state_ == State::Idle && !meetingDialog_->isBusy()) {
+                    const quint64 target = ClipboardPaster::swayFocusedWindow();
+                    if (target == 0) {
+                        overlay_.showError(QStringLiteral("Could not identify the focused Sway window."));
+                        return;
+                    }
+                    startRecording(mode, target);
+                }
+            });
+        };
+        addRecordingAction(QStringLiteral("Start / stop dictation"), OutputMode::Original);
+        addRecordingAction(QStringLiteral("Start / stop translation to English"), OutputMode::English);
+    }
     trayPreferencesAction_ = trayMenu_.addAction(QStringLiteral("Preferences"));
     connect(trayPreferencesAction_, &QAction::triggered, this, &SpeakToComputerApp::showPreferences);
     QAction *meetingsAction = trayMenu_.addAction(QStringLiteral("Meeting Recordings"));
@@ -1720,6 +1804,7 @@ void SpeakToComputerApp::setupTrayIcon()
 
 void SpeakToComputerApp::setOverlayCloseHotkeyEnabled(bool enabled)
 {
+    if (ClipboardPaster::isWayland()) return;
     if (overlayCloseHotkeyEnabled_ == enabled) {
         return;
     }

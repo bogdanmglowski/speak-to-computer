@@ -56,6 +56,7 @@ private slots:
     void buzzAsrShouldPreserveUnicodePathsWithoutUnsupportedPrompts();
     void buzzAsrShouldReportStartupErrorBeforeProcessExit();
     void clipboardCopyShouldNotSendKeystrokes();
+    void swayPasteShouldFocusAndUseTerminalShortcut();
     void clipboardClassicPasteShouldUseCtrlVWithoutXclip();
     void clipboardClassicPasteShouldServeSelectionBeforeEnter();
     void herdrGpuiShouldPasteWithCtrlShiftV();
@@ -571,11 +572,61 @@ void CoreBehaviorTest::buzzAsrShouldReportStartupErrorBeforeProcessExit()
     QVERIFY(failed.at(0).at(0).toString().contains(QStringLiteral("CUDA out of memory")));
 }
 
+void CoreBehaviorTest::swayPasteShouldFocusAndUseTerminalShortcut()
+{
+    QTemporaryDir dir;
+    const QByteArray path = qgetenv("PATH"), session = qgetenv("XDG_SESSION_TYPE"), socket = qgetenv("SWAYSOCK");
+    const bool sessionWasSet = qEnvironmentVariableIsSet("XDG_SESSION_TYPE");
+    const bool socketWasSet = qEnvironmentVariableIsSet("SWAYSOCK");
+    const auto restore = qScopeGuard([&]() {
+        qputenv("PATH", path);
+        if (sessionWasSet) qputenv("XDG_SESSION_TYPE", session); else qunsetenv("XDG_SESSION_TYPE");
+        if (socketWasSet) qputenv("SWAYSOCK", socket); else qunsetenv("SWAYSOCK");
+    });
+    QVERIFY(!createExecutable(&dir, QStringLiteral("swaymsg"),
+            "#!/bin/sh\ncase \"$1\" in -t) printf '%s' '{\"nodes\":[{\"id\":42,\"focused\":true,\"app_id\":\"kitty\"}]}' ;; esac\n").isEmpty());
+    QVERIFY(!createExecutable(&dir, QStringLiteral("wl-copy"),
+            "#!/bin/sh\ncat > \"$(dirname \"$0\")/text\"\n").isEmpty());
+    QVERIFY(!createExecutable(&dir, QStringLiteral("wtype"),
+            "#!/bin/sh\nprintf '%s' \"$*\" > \"$(dirname \"$0\")/args\"\n").isEmpty());
+    qputenv("PATH", dir.path().toUtf8() + ':' + path);
+    qputenv("XDG_SESSION_TYPE", "wayland");
+    qputenv("SWAYSOCK", "test");
+    QCOMPARE(ClipboardPaster::swayFocusedWindow(), quint64(42));
+    ClipboardPaster paster;
+    QString error;
+    QVERIFY2(paster.paste(42, QStringLiteral("zażółć"), &error, false,
+                         ClipboardPaster::PasteBehavior::TerminalCompatible), qPrintable(error));
+    QFile text(dir.filePath(QStringLiteral("text")));
+    QVERIFY(text.open(QIODevice::ReadOnly));
+    QCOMPARE(QString::fromUtf8(text.readAll()), QStringLiteral("zażółć"));
+    QFile args(dir.filePath(QStringLiteral("args")));
+    QVERIFY(args.open(QIODevice::ReadOnly));
+    QCOMPARE(args.readAll(), QByteArray("-M ctrl -M shift v -m shift -m ctrl"));
+    args.close();
+    QVERIFY2(ClipboardPaster::sendWaylandKeys(42, {QStringLiteral("BackSpace"), QStringLiteral("Return")}, &error), qPrintable(error));
+    QVERIFY(args.open(QIODevice::ReadOnly));
+    QCOMPARE(args.readAll(), QByteArray("-k BackSpace -k Return"));
+    args.close();
+    QVERIFY(!ClipboardPaster::sendWaylandKeys(99, {QStringLiteral("Return")}, &error));
+    QVERIFY(!ClipboardPaster::sendWaylandKeys(42, {QStringLiteral("Escape")}, &error));
+    QVERIFY(args.open(QIODevice::ReadOnly));
+    QCOMPARE(args.readAll(), QByteArray("-k BackSpace -k Return"));
+    QVERIFY(!paster.paste(99, QStringLiteral("wrong"), &error));
+}
+
 void CoreBehaviorTest::clipboardCopyShouldNotSendKeystrokes()
 {
     QTemporaryDir dir;
     const QByteArray previousPath = qgetenv("PATH");
-    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    const QByteArray previousSession = qgetenv("XDG_SESSION_TYPE");
+    const bool sessionWasSet = qEnvironmentVariableIsSet("XDG_SESSION_TYPE");
+    const auto restoreEnvironment = qScopeGuard([&]() {
+        qputenv("PATH", previousPath);
+        if (sessionWasSet) qputenv("XDG_SESSION_TYPE", previousSession);
+        else qunsetenv("XDG_SESSION_TYPE");
+    });
+    qputenv("XDG_SESSION_TYPE", "x11");
     QVERIFY(!createExecutable(&dir, QStringLiteral("xclip"),
             "#!/bin/sh\ncat > \"$(dirname \"$0\")/copied.txt\"\n").isEmpty());
     QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
@@ -594,7 +645,14 @@ void CoreBehaviorTest::clipboardClassicPasteShouldUseCtrlVWithoutXclip()
 {
     QTemporaryDir dir;
     const QByteArray previousPath = qgetenv("PATH");
-    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    const QByteArray previousSession = qgetenv("XDG_SESSION_TYPE");
+    const bool sessionWasSet = qEnvironmentVariableIsSet("XDG_SESSION_TYPE");
+    const auto restoreEnvironment = qScopeGuard([&]() {
+        qputenv("PATH", previousPath);
+        if (sessionWasSet) qputenv("XDG_SESSION_TYPE", previousSession);
+        else qunsetenv("XDG_SESSION_TYPE");
+    });
+    qputenv("XDG_SESSION_TYPE", "x11");
     QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
             "#!/bin/sh\n"
             "printf '%s\\n' \"$*\" > \"$(dirname \"$0\")/xdotool-args\"\n")
@@ -624,7 +682,14 @@ void CoreBehaviorTest::clipboardClassicPasteShouldServeSelectionBeforeEnter()
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const QByteArray previousPath = qgetenv("PATH");
-    const auto restoreEnvironment = qScopeGuard([&]() { qputenv("PATH", previousPath); });
+    const QByteArray previousSession = qgetenv("XDG_SESSION_TYPE");
+    const bool sessionWasSet = qEnvironmentVariableIsSet("XDG_SESSION_TYPE");
+    const auto restoreEnvironment = qScopeGuard([&]() {
+        qputenv("PATH", previousPath);
+        if (sessionWasSet) qputenv("XDG_SESSION_TYPE", previousSession);
+        else qunsetenv("XDG_SESSION_TYPE");
+    });
+    qputenv("XDG_SESSION_TYPE", "x11");
     QVERIFY(!createExecutable(&dir, QStringLiteral("xdotool"),
             "#!/bin/sh\n"
             "xclip -selection clipboard -o > \"$(dirname \"$0\")/received\" 2>/dev/null &\n"

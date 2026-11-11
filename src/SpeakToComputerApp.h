@@ -24,6 +24,7 @@
 
 class QAction;
 class MeetingDialog;
+class QLocalServer;
 
 class SpeakToComputerApp : public QObject {
     Q_OBJECT
@@ -33,6 +34,7 @@ public:
     ~SpeakToComputerApp() override;
 
     bool start();
+    void toggleWaylandDictation();
 
 private slots:
     void handleTranscriptionReady(const QString &text);
@@ -118,6 +120,7 @@ private:
 
     AppSettings settings_;
     X11Hotkey dictateHotkey_;
+    QLocalServer *commandServer_ = nullptr;
     X11Hotkey mouseDictateHotkey_;
     X11Hotkey mouseFinishHotkey_;
     X11Hotkey pushToTalkHotkey_;

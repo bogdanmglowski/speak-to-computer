@@ -667,6 +667,9 @@ bool RealtimeSidecar::sendKeys(const QStringList &keys, QString *errorMessage)
     if (keys.isEmpty()) {
         return true;
     }
+    if (ClipboardPaster::isWayland()) {
+        return ClipboardPaster::sendWaylandKeys(pinPasteTarget_ ? targetWindow_ : 0, keys, errorMessage);
+    }
     const QString xdotool = QStandardPaths::findExecutable(QStringLiteral("xdotool"));
     if (xdotool.isEmpty()) {
         if (errorMessage != nullptr) {
@@ -756,6 +759,10 @@ bool RealtimeSidecar::pasteDelta(const QString &text, QString *errorMessage)
 {
     if (text.isEmpty()) {
         return true;
+    }
+    if (ClipboardPaster::isWayland()) {
+        ClipboardPaster paster;
+        return paster.paste(pinPasteTarget_ ? targetWindow_ : 0, text, errorMessage, false, pasteBehavior_);
     }
     const bool classic = pasteBehavior_ == ClipboardPaster::PasteBehavior::Classic;
     const QString xclip = QStandardPaths::findExecutable(QStringLiteral("xclip"));
