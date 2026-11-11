@@ -70,6 +70,29 @@ Things I’d like to experiment with next:
 
 ## Requirements
 
+### Sway / Wayland
+
+The application detects a Wayland session automatically. On Sway, use the tray
+menu actions **Start / stop dictation** and **Start / stop translation to English**.
+The focused window at the start is used for pinned paste; follow-focus mode uses
+the window focused when transcription finishes. Install `swaymsg`, `wl-copy`
+(`wl-clipboard`) and `wtype`. Terminal-compatible paste uses Ctrl+Shift+V for
+recognized terminals. A Sway binding for that shortcut can intercept it.
+
+To use Super+Space on Sway, add this binding to your Sway configuration (adjust
+the path to the executable you actually run), then reload Sway:
+
+```text
+bindsym $mod+space exec /home/YOUR_USER/.local/bin/speak-to-computer --toggle-dictation
+```
+
+Start the application first; the shortcut sends a command to the running instance.
+Sway controls this binding independently of the hotkey settings in Preferences.
+Other global hotkeys, mouse push-to-talk and Shift+Escape are
+currently X11-only. Wayland support currently requires Sway. The Wayland paste
+replaces the clipboard contents; if pasting fails, use **Kopiuj ostatni tekst**.
+Other Wayland compositors are not supported yet.
+
 Core dictation and translation work without VAD and wake-word support. These are
 optional features and are disabled by default.
 

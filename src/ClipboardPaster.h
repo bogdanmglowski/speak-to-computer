@@ -20,6 +20,9 @@ public:
             bool sendEnter = false,
             PasteBehavior behavior = PasteBehavior::Classic);
     bool copy(const QString &text, QString *errorMessage);
+    static bool isWayland();
+    static quint64 swayFocusedWindow();
+    static bool sendWaylandKeys(quint64 targetWindow, const QStringList &keys, QString *errorMessage);
 
     // Terminal emulators and Herdr GPUI paste with ctrl+shift+v.
     // Everything else uses ctrl+v. Herdr ignores ctrl+v: that key is passed

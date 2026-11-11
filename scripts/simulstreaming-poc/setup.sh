@@ -68,6 +68,16 @@ else:
     print("WARNING: CUDA not available — streaming will be slow on CPU")
 PY
 
+echo "==> Preparing Silero VAD for non-interactive server startup"
+python - <<'PY'
+import torch
+
+# SimulStreaming's VAC loads this repository through torch.hub. Download it
+# during setup and record trust so the background server never prompts on stdin.
+torch.hub.load('snakers4/silero-vad', 'silero_vad', trust_repo=True)
+print('Silero VAD ready')
+PY
+
 # Small sample wav for file mode (English). Optional.
 SAMPLE="${ROOT}/sample-jfk.wav"
 if [[ ! -f "${SAMPLE}" ]]; then

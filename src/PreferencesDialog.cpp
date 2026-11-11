@@ -104,6 +104,10 @@ PreferencesDialog::PreferencesDialog(const AppSettings &settings, QWidget *paren
     contentLayout->addLayout(sectionsLayout);
 
     auto *hotkeysSection = new QGroupBox(QStringLiteral("Hotkeys"), content);
+    if (qEnvironmentVariable("XDG_SESSION_TYPE").compare(QStringLiteral("wayland"), Qt::CaseInsensitive) == 0
+            || (qEnvironmentVariableIsEmpty("XDG_SESSION_TYPE") && !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))) {
+        hotkeysSection->setTitle(QStringLiteral("Hotkeys (X11 only; use tray controls on Wayland)"));
+    }
     auto *hotkeysLayout = createFormLayout(hotkeysSection);
     hotkeyDictateEdit_ = new QLineEdit(settings.hotkeyDictate, hotkeysSection);
     hotkeyTranslateEnEdit_ = new QLineEdit(settings.hotkeyTranslateEn, hotkeysSection);

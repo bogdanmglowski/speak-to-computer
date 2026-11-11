@@ -4,6 +4,9 @@
 #include <QClipboard>
 #include <QDebug>
 #include <QEventLoop>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMimeData>
 #include <QProcess>
 #include <QStandardPaths>
@@ -15,7 +18,60 @@ namespace {
 
 bool writeX11Clipboard(const QString &text, QString *errorMessage);
 quint64 activeWindowId();
-quint64 activeWindowId();
+
+QJsonObject findFocused(const QJsonObject &node)
+{
+    if (node.value(QStringLiteral("focused")).toBool()) return node;
+    for (const QString &key : {QStringLiteral("nodes"), QStringLiteral("floating_nodes")}) {
+        for (const QJsonValue &child : node.value(key).toArray()) {
+            const QJsonObject found = findFocused(child.toObject());
+            if (!found.isEmpty()) return found;
+        }
+    }
+    return {};
+}
+
+QJsonObject swayFocused()
+{
+    QProcess process;
+    process.start(QStringLiteral("swaymsg"), {QStringLiteral("-t"), QStringLiteral("get_tree"), QStringLiteral("-r")});
+    if (!process.waitForFinished(1500) || process.exitCode() != 0) return {};
+    return findFocused(QJsonDocument::fromJson(process.readAllStandardOutput()).object());
+}
+
+bool runWayland(const QString &program, const QStringList &args, const QByteArray &input, QString *error)
+{
+    QProcess process;
+    process.start(program, args);
+    if (!process.waitForStarted(1500)) {
+        if (error) *error = QStringLiteral("Could not start %1: %2").arg(program, process.errorString());
+        return false;
+    }
+    if (!input.isEmpty()) process.write(input);
+    process.closeWriteChannel();
+    if (!process.waitForFinished(3000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        if (error) *error = QStringLiteral("%1 failed: %2").arg(program, QString::fromUtf8(process.readAllStandardError()));
+        return false;
+    }
+    return true;
+}
+
+QJsonObject focusSwayWindow(quint64 targetWindow, QString *error)
+{
+    if (qEnvironmentVariableIsEmpty("SWAYSOCK")) {
+        if (error) *error = QStringLiteral("Wayland paste currently requires Sway.");
+        return {};
+    }
+    if (targetWindow != 0 && !runWayland(QStringLiteral("swaymsg"),
+                {QStringLiteral("[con_id=%1] focus").arg(targetWindow)}, {}, error)) return {};
+    const QJsonObject focused = swayFocused();
+    if ((focused.value(QStringLiteral("app_id")).isNull() && focused.value(QStringLiteral("window")).isNull())
+            || (targetWindow != 0 && static_cast<quint64>(focused.value(QStringLiteral("id")).toInteger()) != targetWindow)) {
+        if (error) *error = QStringLiteral("Could not focus the target Sway window; no input was sent.");
+        return {};
+    }
+    return focused;
+}
 
 } // namespace
 
@@ -24,8 +80,39 @@ ClipboardPaster::ClipboardPaster(QObject *parent)
 {
 }
 
+bool ClipboardPaster::isWayland()
+{
+    const QString session = qEnvironmentVariable("XDG_SESSION_TYPE");
+    return session.compare(QStringLiteral("wayland"), Qt::CaseInsensitive) == 0
+            || (session.isEmpty() && !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"));
+}
+
+quint64 ClipboardPaster::swayFocusedWindow()
+{
+    const QJsonObject focused = swayFocused();
+    if (focused.value(QStringLiteral("app_id")).isNull()
+            && focused.value(QStringLiteral("window")).isNull()) return 0;
+    return static_cast<quint64>(focused.value(QStringLiteral("id")).toInteger());
+}
+
+bool ClipboardPaster::sendWaylandKeys(quint64 targetWindow, const QStringList &keys, QString *errorMessage)
+{
+    if (keys.isEmpty()) return true;
+    QStringList args;
+    for (const QString &key : keys) {
+        if (key != QStringLiteral("Return") && key != QStringLiteral("BackSpace")) {
+            if (errorMessage) *errorMessage = QStringLiteral("Unsupported Wayland key: %1").arg(key);
+            return false;
+        }
+        args << QStringLiteral("-k") << key;
+    }
+    if (focusSwayWindow(targetWindow, errorMessage).isEmpty()) return false;
+    return runWayland(QStringLiteral("wtype"), args, {}, errorMessage);
+}
+
 bool ClipboardPaster::copy(const QString &text, QString *errorMessage)
 {
+    if (isWayland()) return runWayland(QStringLiteral("wl-copy"), {}, text.toUtf8(), errorMessage);
     return writeX11Clipboard(text, errorMessage);
 }
 
@@ -35,6 +122,22 @@ bool ClipboardPaster::paste(quint64 targetWindow,
         bool sendEnter,
         PasteBehavior behavior)
 {
+    if (isWayland()) {
+        const QJsonObject focused = focusSwayWindow(targetWindow, errorMessage);
+        if (focused.isEmpty()) return false;
+        if (!copy(text, errorMessage)) return false;
+        const QString windowClass = focused.value(QStringLiteral("app_id")).toString()
+                + focused.value(QStringLiteral("window_properties")).toObject().value(QStringLiteral("class")).toString();
+        const bool terminal = behavior == PasteBehavior::TerminalCompatible
+                && pasteKeystrokeForWindowClass(windowClass) == QStringLiteral("ctrl+shift+v");
+        QStringList args{QStringLiteral("-M"), QStringLiteral("ctrl")};
+        if (terminal) args << QStringLiteral("-M") << QStringLiteral("shift");
+        args << QStringLiteral("v");
+        if (terminal) args << QStringLiteral("-m") << QStringLiteral("shift");
+        args << QStringLiteral("-m") << QStringLiteral("ctrl");
+        if (sendEnter) args << QStringLiteral("-s") << QStringLiteral("150") << QStringLiteral("-k") << QStringLiteral("Return");
+        return runWayland(QStringLiteral("wtype"), args, {}, errorMessage);
+    }
     const QString xdotool = QStandardPaths::findExecutable(QStringLiteral("xdotool"));
     if (xdotool.isEmpty()) {
         if (errorMessage != nullptr) {
